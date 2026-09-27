@@ -5,7 +5,7 @@ from django.contrib.auth.models import AbstractBaseUser, BaseUserManager
 
 
 class UserManager(BaseUserManager):
-    def create_user(self, first_name, last_name, username, email, password=None):
+    def create_user(self, first_name, last_name, username, email, password=None, phone_number=None, role=None):
         if not email:
             raise ValueError("User must have email address")
 
@@ -17,6 +17,8 @@ class UserManager(BaseUserManager):
             username=username,
             first_name=first_name,
             last_name=last_name,
+            phone_number=phone_number,
+            role=role
         )
 
         user.set_password(password)
@@ -53,7 +55,7 @@ class User(AbstractBaseUser):
     last_name = models.CharField(max_length=50)
     username = models.CharField(max_length=50, unique=True)
     email = models.EmailField(max_length=254, unique=True)
-    phone_number = models.CharField(max_length=12, blank=True)
+    phone_number = models.CharField(max_length=15, blank=True)
     role = models.PositiveSmallIntegerField(choices=ROLE_CHOICE, blank=True, null=True)
 
     # required fields
