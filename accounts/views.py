@@ -1,7 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from . serializer import CustomrRegistrationSerializer
+from . serializer import CustomrRegistrationSerializer, VendorRegistrationSerializer
 from .email_verification import (generate_verification_token,store_verification_token,get_user_id_from_token, delete_verification_token, send_verification_email,resend_verification_email, RESEND_VERIFICATION_COOLDOWN,)
 from django.shortcuts import get_object_or_404
 from .models import User
@@ -54,14 +54,47 @@ class RegisterCustomerView(APIView):
             )
 
 
-class RegisterRestaurantView(APIView):
+class RegisterVendorView(APIView):
 
     def post(self, request):
+        serializer = VendorRegistrationSerializer(data=request.data)
+        
+        if serializer.is_valid():
+            user = serializer.save()
+            
+            token = generate_verification_token()
+            
+            store_verification_token(
+                user.id,
+                token
+            )
+            
+            try:
+                send_verification_email(user, token)
+            except Exception:
+                return Response(
+                    {"error":"Failed to send verification email"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            
+            return Response(
+                {
+                    "message": "Restaurant registered successfully",
+                    "user": {
+                        "id": user.id,
+                        "first_name": user.first_name,
+                        "last_name": user.last_name,
+                        "username": user.username,
+                        "email": user.email,
+                        "phone_number": user.phone_number,
+                    }
+                },
+                status=status.HTTP_201_CREATED
+            )
+
         return Response(
-            {
-                "message": "Register Restaurant API working"
-            },
-            status=status.HTTP_200_OK
+            serializer.errors,
+            status=status.HTTP_400_BAD_REQUEST
         )
 
 
@@ -164,3 +197,5 @@ class ResendVerificationEmailView(APIView):
             {"message": "Verification email sent successfully."},
             status=status.HTTP_200_OK
         )
+
+

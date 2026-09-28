@@ -50,13 +50,14 @@ class User(AbstractBaseUser):
         (RESTAURENT, "RESTAURENT"),
         (CUSTOMER, "CUSTOMER"),
     )
-
+    
     first_name = models.CharField(max_length=50)
     last_name = models.CharField(max_length=50)
     username = models.CharField(max_length=50, unique=True)
     email = models.EmailField(max_length=254, unique=True)
     phone_number = models.CharField(max_length=15, blank=True)
     role = models.PositiveSmallIntegerField(choices=ROLE_CHOICE, blank=True, null=True)
+    approval_status = models.CharField(max_length=20,choices=(('pending', 'Pending'),('approved', 'Approved'),('rejected', 'Rejected'),),default='pending',)
 
     # required fields
 
