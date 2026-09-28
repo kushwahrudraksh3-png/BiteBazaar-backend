@@ -9,4 +9,9 @@ urlpatterns = [
     
     path('register-restaurant/', views.RegisterVendorView.as_view(), name='register-restaurant'),
     
+    path('admin/create-admin/',views.CreateAdminView.as_view(),name='create-admin'),
+    path('admin/vendors/',views.VendorListView.as_view(),name='vendor-list'),
+    path('admin/vendors/<int:vendor_id>/approve/',views.ApproveVendorView.as_view(),name='approve-vendor'),
+    path('admin/vendors/<int:vendor_id>/reject/',views.RejectVendorView.as_view(),name='reject-vendor'),
+    
 ]

@@ -33,15 +33,6 @@ class CustomUserAdmin(UserAdmin):
                 'is_superadmin',
             )
         }),
-
-        ('Important Dates', {
-            'fields': (
-                'last_login',
-                'date_joined',
-                'created_at',
-                'modified_date',
-            )
-        }),
     )
 
 admin.site.register(User, CustomUserAdmin)

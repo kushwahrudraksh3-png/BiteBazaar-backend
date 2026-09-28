@@ -1,11 +1,13 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from . serializer import CustomrRegistrationSerializer, VendorRegistrationSerializer
+from . serializer import CustomrRegistrationSerializer, VendorRegistrationSerializer,AdminRegistrationSerializer, VendorListSerializer
 from .email_verification import (generate_verification_token,store_verification_token,get_user_id_from_token, delete_verification_token, send_verification_email,resend_verification_email, RESEND_VERIFICATION_COOLDOWN,)
 from django.shortcuts import get_object_or_404
 from .models import User
 from django.core.cache import cache
+from .permissions import IsSuperAdmin, IsAdminOrSuperAdmin
+from rest_framework.permissions import IsAuthenticated
 
 
 
@@ -199,3 +201,165 @@ class ResendVerificationEmailView(APIView):
         )
 
 
+class CreateAdminView(APIView):
+    permission_classes = [IsSuperAdmin]
+
+    def post(self, request):
+        serializer = AdminRegistrationSerializer(data=request.data)
+
+        if serializer.is_valid():
+            user = serializer.save()
+
+            token = generate_verification_token()
+
+            store_verification_token(
+                user.id,
+                token
+            )
+
+            try:
+                send_verification_email(
+                    user,
+                    token
+                )
+            except Exception:
+                return Response(
+                    {"error": "Failed to send verification email."},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+
+            return Response(
+                {
+                    "message": "Admin created successfully. Verification email sent.",
+                    "user": {
+                        "id": user.id,
+                        "first_name": user.first_name,
+                        "last_name": user.last_name,
+                        "username": user.username,
+                        "email": user.email,
+                        "phone_number": user.phone_number,
+                    }
+                },
+                status=status.HTTP_201_CREATED
+            )
+
+        return Response(
+            serializer.errors,
+            status=status.HTTP_400_BAD_REQUEST
+        )
+        
+
+class VendorListView(APIView):
+
+    permission_classes = [IsAdminOrSuperAdmin,IsAuthenticated]
+
+    def get(self, request):
+
+        vendors = User.objects.filter(
+            role=User.RESTAURENT,
+            approval_status='pending'
+        )
+
+        serializer = VendorListSerializer(
+            vendors,
+            many=True
+        )
+
+        return Response(
+            {
+                "count": vendors.count(),
+                "vendors": serializer.data
+            },
+            status=status.HTTP_200_OK
+        )
+        
+
+
+class ApproveVendorView(APIView):
+
+    permission_classes = [IsAdminOrSuperAdmin]
+
+    def patch(self, request, vendor_id):
+
+        try:
+            vendor = User.objects.get(
+                id=vendor_id,
+                role=User.RESTAURENT
+            )
+        except User.DoesNotExist:
+            return Response(
+                {"error": "Vendor not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if vendor.approval_status == 'approved':
+            return Response(
+                {"message": "Vendor is already approved."},
+                status=status.HTTP_200_OK
+            )
+
+        if vendor.approval_status == 'rejected':
+            return Response(
+                {"error": "Rejected vendor cannot be approved directly."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        vendor.approval_status = 'approved'
+        vendor.save(update_fields=['approval_status'])
+
+        return Response(
+            {
+                "message": "Vendor approved successfully.",
+                "vendor": {
+                    "id": vendor.id,
+                    "email": vendor.email,
+                    "approval_status": vendor.approval_status
+                }
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+class RejectVendorView(APIView):
+
+    permission_classes = [IsAdminOrSuperAdmin]
+
+    def patch(self, request, vendor_id):
+
+        try:
+            vendor = User.objects.get(
+                id=vendor_id,
+                role=User.RESTAURENT
+            )
+        except User.DoesNotExist:
+            return Response(
+                {"error": "Vendor not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if vendor.approval_status == 'rejected':
+            return Response(
+                {"message": "Vendor is already rejected."},
+                status=status.HTTP_200_OK
+            )
+
+        if vendor.approval_status == 'approved':
+            return Response(
+                {"error": "Approved vendor cannot be rejected directly."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        vendor.approval_status = 'rejected'
+        vendor.save(update_fields=['approval_status'])
+
+        return Response(
+            {
+                "message": "Vendor rejected successfully.",
+                "vendor": {
+                    "id": vendor.id,
+                    "email": vendor.email,
+                    "approval_status": vendor.approval_status
+                }
+            },
+            status=status.HTTP_200_OK
+        )
