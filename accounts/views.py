@@ -2,9 +2,10 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from . serializer import CustomrRegistrationSerializer
-from .email_verification import (generate_verification_token,store_verification_token,get_user_id_from_token, delete_verification_token, send_verification_email)
+from .email_verification import (generate_verification_token,store_verification_token,get_user_id_from_token, delete_verification_token, send_verification_email,resend_verification_email, RESEND_VERIFICATION_COOLDOWN,)
 from django.shortcuts import get_object_or_404
 from .models import User
+from django.core.cache import cache
 
 
 
@@ -25,8 +26,13 @@ class RegisterCustomerView(APIView):
                 token
             )
             
-            send_verification_email(user, token)
-            
+            try:
+                send_verification_email(user, token)
+            except Exception:
+                return Response(
+                    {"error":"Failed to send verification email"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
             return Response(
                 {
                     "message": "Customer registered successfully",
@@ -93,5 +99,68 @@ class VerifyEmailView(APIView):
         
         return Response(
             {"message": "Email verified successfully."},
+            status=status.HTTP_200_OK
+        )
+        
+class ResendVerificationEmailView(APIView):
+    
+    def post(self,request):
+        email = request.data.get("email")
+        
+        if not email:
+            return Response(
+                {"error":"Email is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        email = email.lower().strip()
+        
+        rate_limit_key = f"resend_verification:{email}"
+        
+        if cache.get(rate_limit_key):
+            return Response(
+                {"error": "Please wait 5 minutes before requesting another verification email."},
+                 status=status.HTTP_429_TOO_MANY_REQUESTS
+            )
+        
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            return Response(
+                {"error":"User not found"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        if user.is_active:
+            return Response(
+                {"message":"Email is already verified"},
+                status=status.HTTP_200_OK
+            )
+        
+        token = generate_verification_token()
+        
+        store_verification_token(
+            user.id,
+            token
+        )
+        
+        try:
+            send_verification_email(
+                user,
+                token
+            )
+        except Exception:
+            return Response(
+                {"error":"Failed to send verification email"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        cache.set(
+            rate_limit_key,
+            True,
+            timeout=RESEND_VERIFICATION_COOLDOWN
+        )
+        return Response(
+            {"message": "Verification email sent successfully."},
             status=status.HTTP_200_OK
         )

@@ -1,6 +1,7 @@
 import secrets
 from django.core.cache import cache
 from django.core.mail import send_mail
+from django.core.mail import BadHeaderError
 
 
 
@@ -10,6 +11,7 @@ def generate_verification_token():
 
 
 VERIFICATION_TOKEN_EXPIRY = 15 * 60  # 15 minutes
+RESEND_VERIFICATION_COOLDOWN = 5 * 60  # 5 minutes
 
 def store_verification_token(user_id, token):
     key = f"email_verification:{token}"
@@ -38,9 +40,35 @@ def send_verification_email(user, token):
         f"http://127.0.0.1:8000/api/v1/auth/verify-email/?token={token}"
     )
 
-    send_mail(
-        subject="Verify your BiteBazaar account",
-        message=f"Click the link below to verify your email:\n\n{verification_link}",
-        from_email=None,
-        recipient_list=[user.email],
+    print("EMAIL:", user.email)
+    print("TOKEN:", token)
+    print("LINK:", verification_link)
+    
+    try:
+        send_mail(
+            subject="Verify your BiteBazaar account",
+            message=f"Click the link below to verify your email:\n\n{verification_link}",
+            from_email=None,
+            recipient_list=[user.email],
+        )
+    except BadHeaderError:
+        raise
+    
+    except Exception as e:
+        print("EMAIL SENDING FAILED:", e)
+        raise
+    
+
+
+def resend_verification_email(user):
+    token = generate_verification_token()
+
+    store_verification_token(
+        user.id,
+        token
+    )
+
+    send_verification_email(
+        user,
+        token
     )
