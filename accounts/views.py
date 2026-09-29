@@ -1,7 +1,8 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework import serializers
 from rest_framework import status
-from . serializer import CustomrRegistrationSerializer, VendorRegistrationSerializer,AdminRegistrationSerializer, VendorListSerializer, LoginSerializer
+from . serializer import CustomrRegistrationSerializer, VendorRegistrationSerializer,AdminRegistrationSerializer, VendorListSerializer, LoginSerializer,GoogleLoginSerializer
 from .email_verification import (generate_verification_token,store_verification_token,get_user_id_from_token, delete_verification_token, send_verification_email,resend_verification_email, RESEND_VERIFICATION_COOLDOWN,)
 from django.shortcuts import get_object_or_404
 from .models import User
@@ -9,6 +10,8 @@ from django.core.cache import cache
 from .permissions import IsSuperAdmin, IsAdminOrSuperAdmin
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
+from .google_oauth import get_google_authorization_url, exchange_google_code, verify_google_token,get_google_user_info
+
 
 
 
@@ -430,3 +433,93 @@ class LogoutView(APIView):
             status=status.HTTP_200_OK
         )
 
+
+class GoogleAuthorizationView(APIView):
+
+    def get(self, request):
+
+        authorization_url = get_google_authorization_url()
+
+        return Response(
+            {
+                "authorization_url": authorization_url
+            },
+            status=status.HTTP_200_OK
+        )
+        
+
+class GoogleCallbackView(APIView):
+
+    def get(self, request):
+
+        code = request.query_params.get("code")
+
+        if not code:
+            return Response(
+                {
+                    "error": "Authorization code is required."
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        token_data = exchange_google_code(code)
+        
+        google_id_token = token_data.get("id_token")
+
+        if not google_id_token:
+            return Response(
+                {
+                    "error": "Google ID token was not returned."
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        idinfo = verify_google_token(google_id_token)
+
+        if not idinfo:
+            return Response(
+                {
+                    "error": "Invalid Google ID token."
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        
+        google_data = get_google_user_info(idinfo)
+
+        if not google_data.get("email"):
+            return Response(
+                {
+                    "error": "Google account email was not provided."
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        serializer = GoogleLoginSerializer()
+
+        try:
+            user = serializer.create_or_get_user(
+                google_data
+            )
+
+        except serializers.ValidationError as exc:
+            return Response(
+                {
+                    "error": exc.detail
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        refresh = RefreshToken.for_user(
+            user
+        )
+
+        return Response(
+            {
+                "message": "Google login successful.",
+                "refresh": str(refresh),
+                "access": str(refresh.access_token),
+            },
+            status=status.HTTP_200_OK
+        )
+        

@@ -55,7 +55,8 @@ class User(AbstractBaseUser):
     last_name = models.CharField(max_length=50)
     username = models.CharField(max_length=50, unique=True)
     email = models.EmailField(max_length=254, unique=True)
-    phone_number = models.CharField(max_length=15, blank=True)
+    google_id = models.CharField(max_length=255,unique=True,null=True,blank=True)
+    phone_number = models.CharField(max_length=15, blank=True, null=True)
     role = models.PositiveSmallIntegerField(choices=ROLE_CHOICE, blank=True, null=True)
     approval_status = models.CharField(max_length=20,choices=(('pending', 'Pending'),('approved', 'Approved'),('rejected', 'Rejected'),),default='pending',)
 

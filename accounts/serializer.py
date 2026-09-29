@@ -4,6 +4,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.validators import RegexValidator
 from django.contrib.auth import authenticate
 from .login_rate_limit import (is_login_blocked,record_failed_login,reset_login_attempts,)
+from . google_oauth import verify_google_token , is_google_email_verified, get_google_user_info
 
 
 
@@ -208,3 +209,81 @@ class LoginSerializer(serializers.Serializer):
         attrs['user'] = user
         
         return attrs
+    
+    
+class GoogleLoginSerializer(serializers.Serializer):
+
+    id_token = serializers.CharField(
+        write_only=True
+    )
+
+    def validate_id_token(self, value):
+        idinfo = verify_google_token(value)
+
+        if not idinfo:
+            raise serializers.ValidationError(
+                "Invalid Google ID token."
+            )
+
+        if not is_google_email_verified(idinfo):
+            raise serializers.ValidationError(
+                "Google email is not verified."
+            )
+
+        return value
+
+    def get_google_user(self):
+        idinfo = verify_google_token(
+            self.validated_data["id_token"]
+        )
+
+        return get_google_user_info(idinfo)
+
+    def create_or_get_user(self, google_data):
+
+        google_id = google_data["google_id"]
+        email = google_data["email"]
+
+        try:
+            user = User.objects.get(
+                google_id=google_id
+            )
+
+            return user
+
+        except User.DoesNotExist:
+
+            try:
+                User.objects.get(
+                    email=email
+                )
+
+                raise serializers.ValidationError(
+                    "An account with this email already exists. "
+                    "Please login with your password."
+                )
+
+            except User.DoesNotExist:
+
+                user = User.objects.create_user(
+                    first_name=google_data["first_name"],
+                    last_name=google_data["last_name"],
+                    username=email.split("@")[0],
+                    email=email,
+                    password=None,
+                    role=User.CUSTOMER,
+                )
+
+                user.google_id = google_id
+                user.is_active = True
+                user.set_unusable_password()
+
+                user.save(
+                    update_fields=[
+                        "google_id",
+                        "is_active",
+                        "password",
+                    ]
+                )
+
+                return user

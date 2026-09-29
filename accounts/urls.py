@@ -19,4 +19,7 @@ urlpatterns = [
     
     path('logout/',views.LogoutView.as_view(),name='logout'),
     
+    path('google/authorize/',views.GoogleAuthorizationView.as_view(),name='google-authorize'),
+    path('google/callback/',views.GoogleCallbackView.as_view(),name='google-callback'),
+    
 ]
