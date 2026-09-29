@@ -1,14 +1,14 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from . serializer import CustomrRegistrationSerializer, VendorRegistrationSerializer,AdminRegistrationSerializer, VendorListSerializer
+from . serializer import CustomrRegistrationSerializer, VendorRegistrationSerializer,AdminRegistrationSerializer, VendorListSerializer, LoginSerializer
 from .email_verification import (generate_verification_token,store_verification_token,get_user_id_from_token, delete_verification_token, send_verification_email,resend_verification_email, RESEND_VERIFICATION_COOLDOWN,)
 from django.shortcuts import get_object_or_404
 from .models import User
 from django.core.cache import cache
 from .permissions import IsSuperAdmin, IsAdminOrSuperAdmin
 from rest_framework.permissions import IsAuthenticated
-
+from rest_framework_simplejwt.tokens import RefreshToken
 
 
 
@@ -362,4 +362,41 @@ class RejectVendorView(APIView):
                 }
             },
             status=status.HTTP_200_OK
+        )
+        
+        
+class LoginView(APIView):
+    
+    def post(self, request):
+        
+        serializer = LoginSerializer(data=request.data)
+        
+        if serializer.is_valid():
+            user = serializer.validated_data['user']
+            
+            if not user.is_active:
+                return Response(
+                    {"error":"Verify your email first"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            if user.role == User.RESTAURENT:
+                if user.approval_status != 'approved':
+                    return Response(
+                        {"error":"Your vendor account is not approved yet"},
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+            
+            refresh = RefreshToken.for_user(user)
+
+            return Response(
+                {
+                    "refresh":str(refresh),
+                    "access":str(refresh.access_token),
+                },
+                status=status.HTTP_200_OK
+            )
+        return Response(
+            serializer.errors,
+            status=status.HTTP_400_BAD_REQUEST
         )
