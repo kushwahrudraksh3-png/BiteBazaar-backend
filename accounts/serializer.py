@@ -287,3 +287,57 @@ class GoogleLoginSerializer(serializers.Serializer):
                 )
 
                 return user
+
+
+class ForgotPasswordSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        return value.lower().strip()
+
+    def get_user(self):
+        email = self.validated_data["email"]
+
+        try:
+            return User.objects.get(email=email)
+        except User.DoesNotExist:
+            return None
+
+
+
+class VerifyResetOTPSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    otp = serializers.CharField(
+        min_length=6,
+        max_length=6
+    )
+
+    def validate_email(self, value):
+        return value.lower().strip()
+    
+
+class ResetPasswordSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    reset_token = serializers.CharField()
+    new_password = serializers.CharField(
+        write_only=True,
+        min_length=8
+    )
+    confirm_password = serializers.CharField(
+        write_only=True,
+        min_length=8
+    )
+
+    def validate_email(self, value):
+        return value.lower().strip()
+
+    def validate(self, attrs):
+        if attrs["new_password"] != attrs["confirm_password"]:
+            raise serializers.ValidationError(
+                {"confirm_password": "Passwords do not match."}
+            )
+
+        validate_password(attrs["new_password"])
+
+        return attrs
+    

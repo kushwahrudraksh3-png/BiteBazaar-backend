@@ -2,7 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import serializers
 from rest_framework import status
-from . serializer import CustomrRegistrationSerializer, VendorRegistrationSerializer,AdminRegistrationSerializer, VendorListSerializer, LoginSerializer,GoogleLoginSerializer
+from . serializer import CustomrRegistrationSerializer, VendorRegistrationSerializer,AdminRegistrationSerializer, VendorListSerializer, LoginSerializer,GoogleLoginSerializer, ForgotPasswordSerializer, VerifyResetOTPSerializer,ResetPasswordSerializer 
 from .email_verification import (generate_verification_token,store_verification_token,get_user_id_from_token, delete_verification_token, send_verification_email,resend_verification_email, RESEND_VERIFICATION_COOLDOWN,)
 from django.shortcuts import get_object_or_404
 from .models import User
@@ -11,7 +11,9 @@ from .permissions import IsSuperAdmin, IsAdminOrSuperAdmin
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from .google_oauth import get_google_authorization_url, exchange_google_code, verify_google_token,get_google_user_info
-
+from .password_reset import (generate_reset_otp,store_reset_otp,send_reset_otp_email,)
+from .password_reset import (generate_reset_token,store_reset_token,verify_reset_otp,delete_reset_otp,)
+from .password_reset import (verify_reset_token,delete_reset_token,delete_reset_otp,)
 
 
 
@@ -523,3 +525,112 @@ class GoogleCallbackView(APIView):
             status=status.HTTP_200_OK
         )
         
+
+class ForgotPasswordView(APIView):
+    def post(self, request):
+        serializer = ForgotPasswordSerializer(data=request.data)
+
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        user = serializer.get_user()
+
+        if user:
+            otp = generate_reset_otp()
+            store_reset_otp(user.email, otp)
+
+            try:
+                send_reset_otp_email(user, otp)
+            except Exception:
+                return Response(
+                    {"error": "Failed to send password reset email."},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+
+        return Response(
+            {
+                "message": (
+                    "If an account exists with this email, "
+                    "a password reset code has been sent."
+                )
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+
+class VerifyResetOTPView(APIView):
+    def post(self, request):
+        serializer = VerifyResetOTPSerializer(data=request.data)
+
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        email = serializer.validated_data["email"]
+        otp = serializer.validated_data["otp"]
+
+        if not verify_reset_otp(email, otp):
+            return Response(
+                {"error": "Invalid or expired OTP."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        reset_token = generate_reset_token()
+        store_reset_token(email, reset_token)
+
+        delete_reset_otp(email)
+
+        return Response(
+            {
+                "message": "OTP verified successfully.",
+                "reset_token": reset_token,
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+
+class ResetPasswordView(APIView):
+    def post(self, request):
+        serializer = ResetPasswordSerializer(data=request.data)
+
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        email = serializer.validated_data["email"]
+        reset_token = serializer.validated_data["reset_token"]
+        new_password = serializer.validated_data["new_password"]
+
+        if not verify_reset_token(email, reset_token):
+            return Response(
+                {"error": "Invalid or expired reset token."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            return Response(
+                {"error": "Unable to reset password."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        user.set_password(new_password)
+        user.save(update_fields=["password"])
+
+        delete_reset_token(email)
+        delete_reset_otp(email)
+
+        return Response(
+            {"message": "Password reset successfully."},
+            status=status.HTTP_200_OK
+        )

@@ -22,4 +22,7 @@ urlpatterns = [
     path('google/authorize/',views.GoogleAuthorizationView.as_view(),name='google-authorize'),
     path('google/callback/',views.GoogleCallbackView.as_view(),name='google-callback'),
     
+    path('forgot-password/',views.ForgotPasswordView.as_view(),name='forgot-password'),
+    path('verify-reset-otp/',views.VerifyResetOTPView.as_view(),name='verify-reset-otp'),
+    path('reset-password/',views.ResetPasswordView.as_view(),name='reset-password'),
 ]

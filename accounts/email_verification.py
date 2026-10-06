@@ -2,7 +2,7 @@ import secrets
 from django.core.cache import cache
 from django.core.mail import send_mail
 from django.core.mail import BadHeaderError
-
+from django.conf import settings
 
 
 
@@ -37,8 +37,8 @@ def delete_verification_token(token):
 
 def send_verification_email(user, token):
     verification_link = (
-        f"http://127.0.0.1:8000/api/v1/auth/verify-email/?token={token}"
-    )
+    f"{settings.BACKEND_BASE_URL}/api/v1/auth/verify-email/?token={token}"
+)
 
     print("EMAIL:", user.email)
     print("TOKEN:", token)
@@ -72,3 +72,4 @@ def resend_verification_email(user):
         user,
         token
     )
+    
