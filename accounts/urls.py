@@ -2,6 +2,8 @@ from django.urls import path
 from . import views
 from rest_framework_simplejwt.views import TokenRefreshView
 
+# Complete authentication system of BiteBazaar
+
 urlpatterns = [
     path('register-customer/', views.RegisterCustomerView.as_view(), name='register'),
     path('verify-email/', views.VerifyEmailView.as_view(), name='verify-email'),
