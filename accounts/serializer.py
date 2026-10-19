@@ -2,6 +2,7 @@ from rest_framework import serializers
 from .models import User
 from django.contrib.auth.password_validation import validate_password
 from django.core.validators import RegexValidator
+from django.contrib.auth import get_user_model
 from django.contrib.auth import authenticate
 from .login_rate_limit import (is_login_blocked,record_failed_login,reset_login_attempts,)
 from . google_oauth import verify_google_token , is_google_email_verified, get_google_user_info
@@ -78,7 +79,14 @@ class VendorRegistrationSerializer(serializers.ModelSerializer):
         return value
 
     def validate_email(self, value):
-        return value.lower().strip()
+        email = value.lower().strip()
+
+        if User.objects.filter(email__iexact=email).exists():
+            raise serializers.ValidationError(
+                "A user with this email already exists."
+            )
+
+        return email
 
     def validate_username(self, value):
         return value.strip()
@@ -199,6 +207,18 @@ class LoginSerializer(serializers.Serializer):
         )
         
         if not user:
+            User = get_user_model()
+
+            inactive_user = User.objects.filter(
+                email__iexact=email,
+                is_active=False
+            ).first()
+
+            if inactive_user and inactive_user.check_password(password):
+                reset_login_attempts(email)
+                attrs["user"] = inactive_user
+                return attrs
+
             record_failed_login(email)
             raise serializers.ValidationError(
                 "Invalid email or password"

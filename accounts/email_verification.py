@@ -40,9 +40,9 @@ def send_verification_email(user, token):
     f"{settings.BACKEND_BASE_URL}/api/v1/auth/verify-email/?token={token}"
 )
 
-    print("EMAIL:", user.email)
-    print("TOKEN:", token)
-    print("LINK:", verification_link)
+    # print("EMAIL:", user.email)
+    # print("TOKEN:", token)
+    # print("LINK:", verification_link)
     
     try:
         send_mail(

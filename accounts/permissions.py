@@ -9,7 +9,7 @@ class IsSuperAdmin(BasePermission):
             and request.user.is_superadmin
             and request.user.is_active
         )
-        
+
 
 
 class IsAdminOrSuperAdmin(BasePermission):
