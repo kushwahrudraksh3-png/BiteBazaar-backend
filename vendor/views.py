@@ -1,8 +1,9 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
-from .models import Restaurant, RestaurantTiming
-from .serializers import RestaurantSerializer, RestaurantTimingSerializer
+from .models import Restaurant, RestaurantTiming, Category, FoodItem
+from django.shortcuts import get_object_or_404
+from .serializers import RestaurantSerializer, RestaurantTimingSerializer, CategorySerializer, FoodItemSerializer
 
 
 class RestaurantProfileView(APIView):
@@ -161,3 +162,165 @@ class RestaurantTimingView(APIView):
             return Response(serializer.data, status=status.HTTP_200_OK)
             
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    
+
+# ==========================================
+# CATEGORY API VIEWS
+# ==========================================
+
+class CategoryListCreateAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        try:
+            restaurant = Restaurant.objects.get(user=request.user)
+        except Restaurant.DoesNotExist:
+            return Response({"error": "Restaurant profile not found."}, status=status.HTTP_404_NOT_FOUND)
+        
+        categories = Category.objects.filter(restaurant=restaurant)
+        serializer = CategorySerializer(categories, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        try:
+            restaurant = Restaurant.objects.get(user=request.user)
+        except Restaurant.DoesNotExist:
+            return Response({"error": "Restaurant profile not found."}, status=status.HTTP_404_NOT_FOUND)
+        
+        serializer = CategorySerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(restaurant=restaurant)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CategoryDetailAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self, pk, user):
+        # Yeh function ensure karega ki vendor sirf apni category access kar sake
+        return get_object_or_404(Category, pk=pk, restaurant__user=user)
+
+    def get(self, request, pk):
+        category = self.get_object(pk, request.user)
+        serializer = CategorySerializer(category)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def put(self, request, pk):
+        # PUT: Full Update (Saare required fields bhejna zaroori hai)
+        category = self.get_object(pk, request.user)
+        serializer = CategorySerializer(category, data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def patch(self, request, pk):
+        # PATCH: Partial Update (Sirf specific fields update karne ke liye)
+        category = self.get_object(pk, request.user)
+        serializer = CategorySerializer(category, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, pk):
+        category = self.get_object(pk, request.user)
+        category.delete()
+        return Response({"message": "Category deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
+
+
+# ==========================================
+# FOOD ITEM API VIEWS
+# ==========================================
+
+class FoodItemListCreateAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        try:
+            restaurant = Restaurant.objects.get(user=request.user)
+        except Restaurant.DoesNotExist:
+            return Response({"error": "Restaurant profile not found."}, status=status.HTTP_404_NOT_FOUND)
+        
+        items = FoodItem.objects.filter(restaurant=restaurant)
+        serializer = FoodItemSerializer(items, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        try:
+            restaurant = Restaurant.objects.get(user=request.user)
+        except Restaurant.DoesNotExist:
+            return Response({"error": "Restaurant profile not found."}, status=status.HTTP_404_NOT_FOUND)
+        
+        serializer = FoodItemSerializer(data=request.data)
+        if serializer.is_valid():
+            category = serializer.validated_data.get('category')
+            # Security Check: Dish sirf usi category mein add ho sakti hai jo is vendor ki ho
+            if category.restaurant != restaurant:
+                return Response(
+                    {"error": "You cannot add food items to another restaurant's category."}, 
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            serializer.save(restaurant=restaurant)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class FoodItemDetailAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self, pk, user):
+        return get_object_or_404(FoodItem, pk=pk, restaurant__user=user)
+
+    def get(self, request, pk):
+        item = self.get_object(pk, request.user)
+        serializer = FoodItemSerializer(item)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def put(self, request, pk):
+        # PUT: Full Update
+        item = self.get_object(pk, request.user)
+        serializer = FoodItemSerializer(item, data=request.data)
+        
+        if serializer.is_valid():
+            # Security check agar category update ho rahi ho
+            if 'category' in serializer.validated_data:
+                new_category = serializer.validated_data['category']
+                if new_category.restaurant.user != request.user:
+                    return Response(
+                        {"error": "Invalid category selection."}, 
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+                    
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def patch(self, request, pk):
+        # PATCH: Partial Update (Jaise sirf price ya availability change karni ho)
+        item = self.get_object(pk, request.user)
+        serializer = FoodItemSerializer(item, data=request.data, partial=True)
+        
+        if serializer.is_valid():
+            if 'category' in serializer.validated_data:
+                new_category = serializer.validated_data['category']
+                if new_category.restaurant.user != request.user:
+                    return Response(
+                        {"error": "Invalid category selection."}, 
+                        status=status.HTTP_403_FORBIDDEN
+                    )
+                    
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, pk):
+        item = self.get_object(pk, request.user)
+        item.delete()
+        return Response({"message": "Food item deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
+    
+    
+    

@@ -56,3 +56,42 @@ class RestaurantTiming(models.Model):
 
     def __str__(self):
         return f"{self.restaurant.restaurant_name} - {self.get_day_display()}"
+    
+    
+
+
+class Category(models.Model):
+    restaurant = models.ForeignKey(Restaurant, on_delete=models.CASCADE, related_name='categories')
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name_plural = 'Categories'
+        # Ek restaurant mein same naam ki 2 category nahi ho sakti (e.g. do baar 'Starters' nahi hoga)
+        unique_together = ('restaurant', 'name')
+
+    def __str__(self):
+        return f"{self.name} - {self.restaurant.restaurant_name}"
+
+
+class FoodItem(models.Model):
+    restaurant = models.ForeignKey(Restaurant, on_delete=models.CASCADE, related_name='food_items')
+    category = models.ForeignKey(Category, on_delete=models.CASCADE, related_name='food_items')
+    
+    name = models.CharField(max_length=200)
+    description = models.TextField(blank=True, null=True)
+    price = models.DecimalField(max_digits=8, decimal_places=2) # Supports max 999999.99
+    
+    is_veg = models.BooleanField(default=True)
+    is_available = models.BooleanField(default=True)
+    
+    # Dish ki photo ke liye (iske liye hume Pillow library install karni padegi)
+    image = models.ImageField(upload_to='food_images/', blank=True, null=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.name} - ₹{self.price}"

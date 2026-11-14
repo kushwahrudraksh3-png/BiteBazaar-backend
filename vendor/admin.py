@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Restaurant, RestaurantTiming
+from .models import Restaurant, RestaurantTiming, Category, FoodItem
 
 @admin.register(Restaurant)
 class RestaurantAdmin(admin.ModelAdmin):
@@ -20,3 +20,18 @@ class RestaurantTimingAdmin(admin.ModelAdmin):
     list_display = ['restaurant', 'day', 'open_time', 'close_time', 'is_closed']
     list_filter = ['day', 'is_closed']
     search_fields = ['restaurant__restaurant_name']
+    
+
+
+@admin.register(Category)
+class CategoryAdmin(admin.ModelAdmin):
+    list_display = ('name', 'restaurant', 'created_at')
+    search_fields = ('name', 'restaurant__restaurant_name')
+    list_filter = ('restaurant',)
+
+@admin.register(FoodItem)
+class FoodItemAdmin(admin.ModelAdmin):
+    list_display = ('name', 'restaurant', 'category', 'price', 'is_veg', 'is_available')
+    search_fields = ('name', 'restaurant__restaurant_name', 'category__name')
+    list_filter = ('is_veg', 'is_available', 'restaurant')
+    list_editable = ('is_available', 'price') # Direct admin panel se price aur availability change karne ke liye
