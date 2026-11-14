@@ -1,0 +1,68 @@
+name: Accounts Feature CI
+
+on:
+  pull_request:
+    branches:
+      - epic/vendor-management
+  workflow_dispatch:
+
+jobs:
+  test-accounts:
+    runs-on: ubuntu-latest
+
+    # Accounts ke liye hume PostgreSQL aur Redis DONO chahiye
+    services:
+      postgres:
+        image: postgis/postgis:15-3.3  # Django database setup ke liye PostGIS zaroori hai
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: bitebazaar_test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install System Dependencies (For GeoDjango)
+        run: sudo apt-get update && sudo apt-get install -y binutils libproj-dev gdal-bin libgdal-dev
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install coverage
+
+      - name: Run Accounts Tests with Coverage
+        env:
+          SECRET_KEY: 'django-insecure-test-key-for-github-actions'
+          DB_NAME: bitebazaar_test_db
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          DB_HOST: localhost
+          DB_PORT: 5432
+          REDIS_URL: redis://localhost:6379/0  # Redis URL pipeline ke liye
+        run: |
+          coverage run --source='accounts' manage.py test accounts
+          coverage report
