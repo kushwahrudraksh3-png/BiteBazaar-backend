@@ -128,3 +128,36 @@ class RestaurantTimingView(APIView):
             return Response(serializer.data, status=response_status)
             
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    # 3. PATCH Request: Kisi specific din ki timing ka partial update (e.g., sirf is_closed change karna)
+    def patch(self, request):
+        restaurant = self.get_restaurant(request.user)
+        if not restaurant:
+            return Response(
+                {"error": "Restaurant profile not found."}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        day = request.data.get('day')
+        if not day:
+            return Response(
+                {"error": "Update karne ke liye 'day' field (1-7) bhejki zaroori hai."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Check karo ki us din ki timing already exist karti hai ya nahi
+        existing_timing = RestaurantTiming.objects.filter(restaurant=restaurant, day=day).first()
+        if not existing_timing:
+            return Response(
+                {"error": f"Day {day} ki koi timing nahi mili. Pehle POST use karke create karein."}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # partial=True lagaya hai taaki agar sirf ek field aaye (jaise is_closed), toh code error na de
+        serializer = RestaurantTimingSerializer(existing_timing, data=request.data, partial=True)
+        
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+            
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
