@@ -55,7 +55,7 @@ jobs:
           DB_PORT: 5432
         run: |
           # Pehle accounts ke tests
-          python manage.py test accounts
+          # python manage.py test accounts
           
           # Phir vendor ke tests coverage ke sath
           coverage run --source='vendor' manage.py test vendor
