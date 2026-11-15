@@ -44,7 +44,7 @@ jobs:
           pip install -r requirements.txt
           pip install coverage
 
-      - name: Run Auth & Vendor Tests with Coverage
+      - name: Vendor Tests with Coverage
         env:
           # Django settings ke liye environment variables pass kar rahe hain
           SECRET_KEY: 'django-insecure-test-key-for-github-actions'
