@@ -1,19 +1,18 @@
 name: BiteBazaar CI Pipeline
 
-# 1. Pipeline kab chalegi? Jab bhi in branches par Pull Request aayegi
 on:
   pull_request:
     branches:
-      - epic/customer-management  # Jis branch par PR aayegi
+      - epic/customer-management 
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
 
-    # 2. Asli Magic: GitHub server par PostgreSQL aur Redis ka temporary setup
     services:
+      # 1. FIX: Plain postgres ki jagah postgis image laga diya
       postgres:
-        image: postgres:15
+        image: postgis/postgis:15-3.3 
         env:
           POSTGRES_DB: bitebazaar_db
           POSTGRES_USER: postgres
@@ -37,33 +36,33 @@ jobs:
           --health-retries 5
 
     steps:
-    # 3. Tera code GitHub se server par download karna
     - name: Checkout Code
       uses: actions/checkout@v3
 
-    # 4. Python install karna
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.12' # Apna Python version confirm kar lena
+        python-version: '3.12' 
 
-    # 5. Libraries install karna
+    # 2. FIX: GitHub server par GDAL aur Geo libraries install karna
+    - name: Install GDAL and Spatial Libraries
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y binutils libproj-dev gdal-bin libgdal-dev python3-gdal
+
     - name: Install Dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install coverage
 
-    # 6. Tests run karna (Environment variables database aur redis ke liye)
     - name: Run Tests and Coverage
       env:
-        # Ye env variables tere settings.py/ .env se match hone chahiye
         DB_NAME: bitebazaar_db
         DB_USER: postgres
         DB_PASSWORD: password
         DB_HOST: localhost
         DB_PORT: 5432
-        # REDIS_URL: redis://localhost:6379/1 (Agar settings.py env se uthata hai)
       run: |
         coverage run --source='customer' manage.py test customer
-        coverage report 
+        coverage report
