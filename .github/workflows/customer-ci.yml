@@ -58,6 +58,7 @@ jobs:
 
     - name: Run Tests and Coverage
       env:
+        SECRET_KEY: 'django-insecure-test-key-for-github-actions'
         DB_NAME: bitebazaar_db
         DB_USER: postgres
         DB_PASSWORD: password
