@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.contrib.gis.geos import Point
 from .models import Restaurant, RestaurantTiming, Category, FoodItem
 
 
@@ -10,6 +11,10 @@ class RestaurantTimingSerializer(serializers.ModelSerializer):
 
 class RestaurantSerializer(serializers.ModelSerializer):
     timings = RestaurantTimingSerializer(many=True, read_only=True)
+    
+    # Incoming request ke liye temporary write-only fields
+    latitude = serializers.FloatField(write_only=True, required=False, allow_null=True)
+    longitude = serializers.FloatField(write_only=True, required=False, allow_null=True)
 
     class Meta:
         model = Restaurant
@@ -24,9 +29,34 @@ class RestaurantSerializer(serializers.ModelSerializer):
             "address",
             "is_open",
             "timings",
+            "latitude",
+            "longitude",
+            "location",  # PostGIS PointField database wala
             "created_at",
             "updated_at",
         ]
+        read_only_fields = ["id", "location", "created_at", "updated_at"]
+
+    def create(self, validated_data):
+        # Request data se lat/lng alag nikaal lo
+        lat = validated_data.pop('latitude', None)
+        lng = validated_data.pop('longitude', None)
+
+        # Agar lat aur lng diye hain, toh PostGIS Point banao (Longitude pehle aata hai!)
+        if lat is not None and lng is not None:
+            validated_data['location'] = Point(lng, lat, srid=4326)
+
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        lat = validated_data.pop('latitude', None)
+        lng = validated_data.pop('longitude', None)
+
+        # Agar update mein naye lat/lng aaye hain toh location update karo
+        if lat is not None and lng is not None:
+            instance.location = Point(lng, lat, srid=4326)
+
+        return super().update(instance, validated_data)
 
 
 # Upar imports mein check kar lena ki Category aur FoodItem imported hain:

@@ -35,8 +35,6 @@ class Restaurant(models.Model):
     def __str__(self):
         return f"{self.restaurant_name} - {self.user.email}"
     
-    
-    
 class RestaurantTiming(models.Model):
     DAYS_OF_WEEK = (
         (1, 'Monday'), (2, 'Tuesday'), (3, 'Wednesday'),
