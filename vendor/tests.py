@@ -3,6 +3,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
 from .models import Restaurant, RestaurantTiming, Category, FoodItem
+from django.contrib.gis.geos import Point
 
 User = get_user_model()
 
@@ -100,7 +101,39 @@ class VendorAPITests(APITestCase):
         self.client.force_authenticate(user=None)
         self.assertEqual(
             self.client.get(self.profile_url).status_code, status.HTTP_401_UNAUTHORIZED
+    )
+        
+    
+    def test_create_restaurant_with_lat_lng(self):
+        """Test creating restaurant with latitude and longitude (Covers line 47)."""
+        # Ensure user has no profile yet
+        Restaurant.objects.filter(user=self.user).delete()
+        
+        url = reverse('restaurant-profile')
+        data = {
+            "restaurant_name": "Geo Kitchen",
+            "fssai_license_number": "FSSAI555555555",
+            "latitude": 22.7196,
+            "longitude": 75.8577
+        }
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_patch_restaurant_with_lat_lng(self):
+        """Test updating restaurant location with latitude and longitude (Covers line 57)."""
+        # Create initial profile
+        Restaurant.objects.create(
+            user=self.user,
+            restaurant_name="Old Kitchen",
+            fssai_license_number="FSSAI666666666"
         )
+        url = reverse('restaurant-profile')
+        data = {
+            "latitude": 22.7300,
+            "longitude": 75.8700
+        }
+        response = self.client.patch(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
 
     # ==========================================
     # RESTAURANT TIMING TESTS
@@ -468,12 +501,16 @@ class MenuAPITests(APITestCase):
             status.HTTP_403_FORBIDDEN,
         )
 
-    
     def test_model_str_methods(self):
         # Category aur FoodItem ke __str__ method ka coverage
         cat = Category.objects.create(restaurant=self.restaurant1, name="Soups")
-        item = FoodItem.objects.create(restaurant=self.restaurant1, category=cat, name="Tomato Soup", price="150.00")
-        
+        item = FoodItem.objects.create(
+            restaurant=self.restaurant1,
+            category=cat,
+            name="Tomato Soup",
+            price="150.00",
+        )
+
         self.assertTrue(isinstance(str(cat), str))
         self.assertTrue(isinstance(str(item), str))
 
@@ -481,12 +518,93 @@ class MenuAPITests(APITestCase):
         # views.py ki line 318 (Invalid PATCH) ka coverage
         self.client.force_authenticate(user=self.vendor1)
         cat1 = Category.objects.create(restaurant=self.restaurant1, name="C1")
-        item = FoodItem.objects.create(restaurant=self.restaurant1, category=cat1, name="Item 1", price="100")
-        url = reverse('fooditem-detail', args=[item.id])
-        
-        # Galat data bhej kar serializer.errors wali line hit karna
-        response = self.client.patch(url, {"price": "invalid_string"}, format='json')
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        
-        
+        item = FoodItem.objects.create(
+            restaurant=self.restaurant1, category=cat1, name="Item 1", price="100"
+        )
+        url = reverse("fooditem-detail", args=[item.id])
 
+        # Galat data bhej kar serializer.errors wali line hit karna
+        response = self.client.patch(url, {"price": "invalid_string"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class RestaurantSearchTestCase(APITestCase):
+    def setUp(self):
+        # 1. Vendor create karo with all required custom user fields for Search tests
+        self.vendor_user = User.objects.create_user(
+            username="search_vendor",
+            first_name="Search",
+            last_name="Vendor",
+            email="vendor_search@example.com",
+            password="password123",
+            role=1,
+        )
+
+        # 2. Restaurant create karo with specific location
+        restaurant_location = Point(75.8577, 22.7196, srid=4326)
+        self.restaurant = Restaurant.objects.create(
+            user=self.vendor_user,
+            restaurant_name="Nimadi Bhojan",
+            description="manpasand swaad aur traditional food",
+            fssai_license_number="FSSAI123456789",
+            location=restaurant_location,
+        )
+
+        # 3. YEH LINE HONA ZAROORI HAI 👇
+        self.search_url = "/api/customer/restaurants/search/"  # Apne actual URL path se match kar lena
+
+    def test_search_by_keyword_name(self):
+        """Test searching restaurant by name keyword."""
+        response = self.client.get(self.search_url, {"search": "Nimadi"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(
+            response.data["results"][0]["restaurant_name"], "Nimadi Bhojan"
+        )
+
+    def test_search_by_keyword_description(self):
+        """Test searching restaurant by description keyword."""
+        response = self.client.get(self.search_url, {"search": "swaad"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(
+            response.data["results"][0]["restaurant_name"], "Nimadi Bhojan"
+        )
+
+    def test_search_within_radius_success(self):
+        """Test searching with user coordinates within 5km radius (should return restaurant)."""
+        # User is very close to the restaurant (~0.5 km away)
+        user_lat = 22.7200
+        user_lng = 75.8580
+
+        response = self.client.get(
+            self.search_url, {"user_lat": user_lat, "user_lng": user_lng, "radius": 5.0}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 1)
+
+    def test_search_outside_radius_empty(self):
+        """Test searching with user coordinates outside 5km radius (should return 0 results)."""
+        # User is far away (~15+ km away, e.g., Indore railway station / outer area)
+        user_lat = 22.6500
+        user_lng = user_lng = 75.7500
+
+        response = self.client.get(
+            self.search_url, {"user_lat": user_lat, "user_lng": user_lng, "radius": 5.0}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 0)
+        self.assertEqual(response.data["results"], [])
+
+    def test_search_invalid_coordinates(self):
+        """Test search with invalid/malformed coordinates returns 400 bad request."""
+        response = self.client.get(
+            self.search_url, {"user_lat": "invalid_lat", "user_lng": "invalid_lng"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("error", response.data)
