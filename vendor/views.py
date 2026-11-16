@@ -4,7 +4,9 @@ from rest_framework import status, permissions
 from .models import Restaurant, RestaurantTiming, Category, FoodItem
 from django.shortcuts import get_object_or_404
 from .serializers import RestaurantSerializer, RestaurantTimingSerializer, CategorySerializer, FoodItemSerializer
-
+from django.contrib.gis.geos import Point
+from django.contrib.gis.measure import D
+from django.db.models import Q
 
 class RestaurantProfileView(APIView):
     # Allow only authenticated users to access this view
@@ -323,4 +325,42 @@ class FoodItemDetailAPIView(APIView):
         return Response({"message": "Food item deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
     
     
-    
+
+class RestaurantSearchView(APIView):
+    def get(self, request):
+        # 1. Query parameters fetch karo (Clearly named for the customer/user)
+        keyword = request.query_params.get('search', None)
+        user_lat = request.query_params.get('user_lat', None)
+        user_lng = request.query_params.get('user_lng', None)
+        radius_km = float(request.query_params.get('radius', 5.0)) # Default 5 km radius
+
+        # Base queryset: Sirf wahi restaurants jinki location database mein saved hai
+        restaurants = Restaurant.objects.filter(location__isnull=False)
+
+        # 2. Keyword Search (Restaurant Name ya Description)
+        if keyword:
+            restaurants = restaurants.filter(
+                Q(restaurant_name__icontains=keyword) | 
+                Q(description__icontains=keyword)
+            )
+
+        # 3. GeoDjango Location-Based Radius Filtering (Using User/Customer coordinates)
+        if user_lat and user_lng:
+            try:
+                customer_point = Point(float(user_lng), float(user_lat), srid=4326)
+                restaurants = restaurants.filter(
+                    location__distance_lte=(customer_point, D(km=radius_km))
+                )
+            except ValueError:
+                return Response(
+                    {"error": "Invalid latitude or longitude values."}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        # 4. Serialize and Return Results
+        serializer = RestaurantSerializer(restaurants, many=True)
+        return Response({
+            "status": "success",
+            "count": restaurants.count(),
+            "results": serializer.data
+        }, status=status.HTTP_200_OK)
