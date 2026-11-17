@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from vendor.models import Restaurant, FoodItem, Category
+from accounts.models import UserProfile
 
 class CustomerRestaurantListSerializer(serializers.ModelSerializer):
     class Meta:
@@ -29,3 +30,19 @@ class CustomerCategorySerializer(serializers.ModelSerializer):
         # Upar wala CustomerFoodItemSerializer use karke serialize kar rahe hain
         return CustomerFoodItemSerializer(available_items, many=True).data
     
+
+class CustomerProfileSerializer(serializers.ModelSerializer):
+    email = serializers.EmailField(source='user.email', read_only=True)
+    username = serializers.CharField(source='user.username', read_only=True)
+    first_name = serializers.CharField(source='user.first_name', read_only=True)
+    last_name = serializers.CharField(source='user.last_name', read_only=True)
+
+    class Meta:
+        model = UserProfile
+        fields = [
+            'id', 'email', 'username', 'first_name', 'last_name',
+            'profile_picture', 'address_line_1', 'address_line_2',
+            'country', 'state', 'city', 'pincode', 'latitude', 'longitude',
+            'created_at', 'modified_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'modified_at']

@@ -7,8 +7,9 @@ from rest_framework.permissions import IsAuthenticated
 from vendor.models import Restaurant, Category, FoodItem
 from django.shortcuts import get_object_or_404
 from .permissions import IsCustomer
-from . serializers import CustomerRestaurantListSerializer, CustomerCategorySerializer
+from . serializers import CustomerRestaurantListSerializer, CustomerCategorySerializer, CustomerProfileSerializer
 from .cart import Cart
+from accounts.models import UserProfile
 
 
 class RestaurantListView(APIView):
@@ -135,3 +136,30 @@ class CartView(APIView):
         
 
 
+
+class CustomerProfileAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """Fetch the logged-in customer's profile."""
+        # Get or create profile just in case signal didn't fire or row is missing
+        profile, created = UserProfile.objects.get_or_create(user=request.user)
+        serializer = CustomerProfileSerializer(profile)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def patch(self, request):
+        """Update the logged-in customer's profile details (partial update)."""
+        profile, created = UserProfile.objects.get_or_create(user=request.user)
+        
+        # partial=True ka matlab hai ki client agar sirf address_line_1 bheje, 
+        # toh baaki fields null nahi hongi, purani values safe rahengi.
+        serializer = CustomerProfileSerializer(profile, data=request.data, partial=True)
+        
+        if serializer.is_valid():
+            serializer.save()
+            return Response({
+                "message": "Profile updated successfully!",
+                "data": serializer.data
+            }, status=status.HTTP_200_OK)
+            
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
