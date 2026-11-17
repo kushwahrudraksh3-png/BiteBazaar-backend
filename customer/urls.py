@@ -1,7 +1,6 @@
 from django.urls import path
-from . views import RestaurantListView, RestaurantMenuView, CartView
+from . views import RestaurantListView, RestaurantMenuView, CartView, CustomerProfileAPIView
 from vendor.views import RestaurantSearchView
-from 
 
 urlpatterns = [
     path('customer-profile/', CustomerProfileAPIView.as_view(), name='customer-profile'),
