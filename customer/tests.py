@@ -4,6 +4,7 @@ from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from customer.cart import Cart
+from accounts.models import UserProfile
 
 # Apne models yahan import kar lena (App ka naam check kar lena ek baar)
 from vendor.models import Restaurant, Category, FoodItem 
@@ -113,6 +114,81 @@ class CustomerMenuAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+
+class CustomerProfileAPITests(APITestCase):
+    def setUp(self):
+        # 1. Create a test customer user
+        self.user = User.objects.create_user(
+            username="testcustomer",
+            email="customer@example.com",
+            password="testpassword123",
+            first_name="Test",
+            last_name="User"
+        )
+        self.url = reverse('customer-profile')
+
+    def test_get_customer_profile_authenticated(self):
+        """Test fetching profile for an authenticated customer (Auto-creates if missing)."""
+        self.client.force_authenticate(user=self.user)
+        
+        # Delete signal-created profile to test get_or_create creation branch
+        UserProfile.objects.filter(user=self.user).delete()
+
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['email'], "customer@example.com")
+        self.assertEqual(response.data['first_name'], "Test")
+
+    def test_patch_customer_profile_address(self):
+        """Test partial update (PATCH) of customer profile address and coordinates."""
+        self.client.force_authenticate(user=self.user)
+
+        data = {
+            "address_line_1": "104, Rajwada Chowk",
+            "city": "Indore",
+            "state": "Madhya Pradesh",
+            "country": "India",
+            "pincode": "452002",
+            "latitude": "22.7196",
+            "longitude": "75.8577"
+        }
+
+        response = self.client.patch(self.url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['data']['address_line_1'], "104, Rajwada Chowk")
+        self.assertEqual(response.data['data']['city'], "Indore")
+        self.assertEqual(response.data['data']['pincode'], "452002")
+
+    def test_unauthenticated_customer_profile_access(self):
+        """Test that unauthenticated users cannot access or modify the profile."""
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        response_patch = self.client.patch(self.url, {"city": "Mumbai"}, format='json')
+        self.assertEqual(response_patch.status_code, status.HTTP_401_UNAUTHORIZED)
+        
+    
+    def test_patch_customer_profile_valid(self):
+        """Test successfully updating profile (Covers serializer.save() and line 165)."""
+        self.client.force_authenticate(user=self.user)
+        data = {
+            "address_line_1": "104, Rajwada Chowk",
+            "city": "Indore",
+            "pincode": "452002"
+        }
+        response = self.client.patch(self.url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['data']['city'], "Indore")
+
+    def test_patch_customer_profile_invalid(self):
+        """Test patching profile with invalid data (Covers serializer.errors branch)."""
+        self.client.force_authenticate(user=self.user)
+        # Maan le pincode ki max_length 10 hai, agar tu 50 lambi string bhej de toh serializer invalid ho jayega
+        data = {
+            "pincode": "123456789012345678901234567890" 
+        }
+        response = self.client.patch(self.url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
 class CartAPITests(APITestCase):
     def setUp(self):
