@@ -33,6 +33,7 @@ class CheckoutAPITests(APITestCase):
             longitude="75.8937"
         )
         self.customer = User.objects.get(pk=self.customer.pk)
+        self.profile = self.customer.userprofile  # Reference for profile tests
 
         # 2. Create test vendor, category, and food item
         self.vendor_user = User.objects.create_user(
@@ -63,9 +64,12 @@ class CheckoutAPITests(APITestCase):
 
         self.url = reverse('order-checkout')
 
+    def authenticate_customer(self):
+        self.client.force_authenticate(user=self.customer)
+
     def test_checkout_success(self):
         """Test successful multi-vendor order placement from cart."""
-        self.client.force_authenticate(user=self.customer)
+        self.authenticate_customer()
 
         class DummyRequest:
             def __init__(self, user):
@@ -84,7 +88,7 @@ class CheckoutAPITests(APITestCase):
 
     def test_checkout_empty_cart(self):
         """Test checkout failure when cart is empty."""
-        self.client.force_authenticate(user=self.customer)
+        self.authenticate_customer()
 
         class DummyRequest:
             def __init__(self, user):
@@ -100,8 +104,11 @@ class CheckoutAPITests(APITestCase):
 
     def test_checkout_incomplete_profile_address(self):
         """Test checkout failure when profile address is missing required fields."""
-        self.client.force_authenticate(user=self.customer)
+        self.authenticate_customer()
+        
+        # Update DB and refresh profile cache in memory
         UserProfile.objects.filter(user=self.customer).update(city="")
+        self.customer.userprofile.refresh_from_db()
 
         class DummyRequest:
             def __init__(self, user):
@@ -118,17 +125,31 @@ class CheckoutAPITests(APITestCase):
 
     def test_checkout_missing_profile(self):
         """Test checkout failure when user profile does not exist."""
-        UserProfile.objects.filter(user=self.customer).delete()
-        self.client.force_authenticate(user=self.customer)
+        self.authenticate_customer()
 
-        response = self.client.post(self.url, format='json')
-        
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data['error'], "Customer profile not found. Please complete your profile first.")
+        # Mock user.userprofile property to raise UserProfile.DoesNotExist cleanly
+        with patch('accounts.models.UserProfile.DoesNotExist', Exception):
+            pass  # Just ensuring import/context
 
+        from unittest.mock import PropertyMock
+        with patch.object(type(self.customer), 'userprofile', new_callable=PropertyMock) as mock_profile:
+            mock_profile.side_effect = UserProfile.DoesNotExist("Profile not found")
+
+            class DummyRequest:
+                def __init__(self, user):
+                    self.user = user
+
+            cart = Cart(DummyRequest(self.customer))
+            cart.clear()
+            cart.add(self.food_item, quantity=1)
+
+            response = self.client.post(self.url, format='json')
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+            self.assertEqual(response.data['error'], "Customer profile not found. Please complete your profile first.")
+    
     def test_checkout_invalid_cart_item(self):
         """Test checkout failure when cart item lacks restaurant reference."""
-        self.client.force_authenticate(user=self.customer)
+        self.authenticate_customer()
 
         class DummyRequest:
             def __init__(self, user):
@@ -150,10 +171,15 @@ class CheckoutAPITests(APITestCase):
         self.assertIn("Invalid cart item data", response.data['error'])
 
     def test_checkout_geodjango_exception_fallback(self):
-        """Test graceful fallback when GeoDjango Point coordinates are invalid (covers ValueError/TypeError)."""
-        self.client.force_authenticate(user=self.customer)
-        # Set invalid non-numeric latitude/longitude to trigger GeoDjango conversion exception
-        UserProfile.objects.filter(user=self.customer).update(latitude="invalid_lat", longitude="invalid_lng")
+        """Test graceful fallback when GeoDjango Point coordinates raise ValueError or TypeError."""
+        self.authenticate_customer()
+        
+        # Set invalid latitude/longitude that causes float conversion or Point init to raise ValueError/TypeError
+        UserProfile.objects.filter(user=self.customer).update(
+            latitude="invalid_lat", 
+            longitude="75.8937"
+        )
+        self.customer.userprofile.refresh_from_db()
 
         class DummyRequest:
             def __init__(self, user):
@@ -164,12 +190,13 @@ class CheckoutAPITests(APITestCase):
         cart.add(self.food_item, quantity=1)
 
         response = self.client.post(self.url, format='json')
+        # Even with invalid lat/lng, checkout should succeed with delivery_location = None (graceful fallback)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-
+        
     @patch('orders.views.Order.objects.create', side_effect=Exception("Database error"))
     def test_checkout_server_error_500(self, mock_create):
         """Test 500 internal server error handling during transaction atomic block."""
-        self.client.force_authenticate(user=self.customer)
+        self.authenticate_customer()
 
         class DummyRequest:
             def __init__(self, user):
@@ -190,11 +217,9 @@ class CheckoutAPITests(APITestCase):
 
     def test_models_str_and_serializers(self):
         """Test models __str__ methods (including deleted food item) and CheckoutSerializer coverage."""
-        # 1. Test Serializer
         serializer = CheckoutSerializer(data={'delivery_address': 'Indore', 'latitude': 22.75, 'longitude': 75.89})
         self.assertTrue(serializer.is_valid())
 
-        # 2. Test Order __str__
         order = Order.objects.create(
             customer=self.customer,
             total_price=290.00,
@@ -203,7 +228,6 @@ class CheckoutAPITests(APITestCase):
         )
         self.assertIn("Order #", str(order))
 
-        # 3. Test SubOrder __str__
         sub_order = SubOrder.objects.create(
             order=order,
             vendor=self.restaurant,
@@ -212,7 +236,6 @@ class CheckoutAPITests(APITestCase):
         )
         self.assertIn("SubOrder #", str(sub_order))
 
-        # 4. Test OrderItem __str__ with active food item and deleted (null) food item
         item_with_food = OrderItem.objects.create(
             sub_order=sub_order,
             food_item=self.food_item,
@@ -228,3 +251,39 @@ class CheckoutAPITests(APITestCase):
             price=290.00
         )
         self.assertIn("Deleted Item", str(item_deleted_food))
+
+    def test_checkout_fails_restaurant_closed(self):
+        """Test checkout failure when restaurant is closed (is_open=False guard)."""
+        self.restaurant.is_open = False
+        self.restaurant.save()
+        self.authenticate_customer()
+
+        class DummyRequest:
+            def __init__(self, user):
+                self.user = user
+
+        cart = Cart(DummyRequest(self.customer))
+        cart.clear()
+        cart.add(self.food_item, quantity=1)
+
+        response = self.client.post(self.url, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("currently closed", response.data['error'])
+
+    def test_checkout_fails_food_item_unavailable(self):
+        """Test checkout failure when food item is out of stock (is_available=False guard)."""
+        self.food_item.is_available = False
+        self.food_item.save()
+        self.authenticate_customer()
+
+        class DummyRequest:
+            def __init__(self, user):
+                self.user = user
+
+        cart = Cart(DummyRequest(self.customer))
+        cart.clear()
+        cart.add(self.food_item, quantity=1)
+
+        response = self.client.post(self.url, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("out of stock", response.data['error'])
