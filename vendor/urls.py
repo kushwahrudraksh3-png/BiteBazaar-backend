@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import RestaurantProfileView,CategoryListCreateAPIView,CategoryDetailAPIView, RestaurantTimingView,FoodItemListCreateAPIView,FoodItemDetailAPIView
+from .views import RestaurantProfileView,CategoryListCreateAPIView,CategoryDetailAPIView, RestaurantTimingView,FoodItemListCreateAPIView,FoodItemDetailAPIView, ToggleRestaurantStatusView
 
 urlpatterns = [
     # Endpoint: /api/vendor/profile/
@@ -11,4 +11,7 @@ urlpatterns = [
     
     path('food-items/', FoodItemListCreateAPIView.as_view(), name='fooditem-list-create'),
     path('food-items/<int:pk>/', FoodItemDetailAPIView.as_view(), name='fooditem-detail'),
+    
+    path('profile/status/toggle/', ToggleRestaurantStatusView.as_view(), name='restaurant-status-toggle'),
+
 ]
