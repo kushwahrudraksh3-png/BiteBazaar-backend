@@ -608,3 +608,101 @@ class RestaurantSearchTestCase(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("error", response.data)
+
+
+class ToggleRestaurantStatusAPITests(APITestCase):
+    def setUp(self):
+        # 1. Create a vendor user with required first_name and last_name
+        self.vendor_user = User.objects.create_user(
+            username="testvendor",
+            email="vendor@example.com",
+            password="password123",
+            first_name="Test",
+            last_name="Vendor",
+            role=User.RESTAURENT if hasattr(User, 'RESTAURENT') else 1
+        )
+        
+        # 2. Create associated Restaurant profile (default is_open=False)
+        self.restaurant = Restaurant.objects.create(
+            user=self.vendor_user,
+            restaurant_name="Nimadi Rasoi",
+            fssai_license_number="12345678901234",
+            is_open=False
+        )
+
+        # 3. Create a non-vendor user (e.g. customer) for permission testing
+        self.customer_user = User.objects.create_user(
+            username="testcustomer",
+            email="customer@example.com",
+            password="password123",
+            first_name="Test",
+            last_name="Customer",
+            role=0  # Customer role
+        )
+
+        # 4. For test_toggle_status_restaurant_profile_not_found, create orphan vendor when needed or inside that specific test:
+        self.orphan_vendor_data = {
+            "username": "orphanvendor",
+            "email": "orphan@example.com",
+            "password": "password123",
+            "first_name": "Orphan",
+            "last_name": "Vendor",
+            "role": User.RESTAURENT if hasattr(User, 'RESTAURENT') else 1
+        }
+
+        self.url = reverse('restaurant-status-toggle')
+
+    def test_toggle_status_success_to_open(self):
+        """Test that a vendor can successfully toggle their restaurant status to open."""
+        self.client.force_authenticate(user=self.vendor_user)
+        response = self.client.patch(self.url, {"is_open": True}, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['is_open'])
+        
+        # Verify in database
+        self.restaurant.refresh_from_db()
+        self.assertTrue(self.restaurant.is_open)
+
+    def test_toggle_status_success_to_closed(self):
+        """Test that a vendor can successfully toggle their restaurant status to closed."""
+        self.restaurant.is_open = True
+        self.restaurant.save()
+
+        self.client.force_authenticate(user=self.vendor_user)
+        response = self.client.patch(self.url, {"is_open": False}, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data['is_open'])
+        
+        # Verify in database
+        self.restaurant.refresh_from_db()
+        self.assertFalse(self.restaurant.is_open)
+
+    def test_toggle_status_invalid_payload(self):
+        """Test that sending invalid data (non-boolean) returns 400 Bad Request."""
+        self.client.force_authenticate(user=self.vendor_user)
+        response = self.client.patch(self.url, {"is_open": "not_a_boolean"}, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_toggle_status_forbidden_for_non_vendor(self):
+        """Test that non-vendor users (like customers) cannot access the toggle API."""
+        self.client.force_authenticate(user=self.customer_user)
+        response = self.client.patch(self.url, {"is_open": True}, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_toggle_status_restaurant_profile_not_found(self):
+        """Test handling when a vendor user does not have a restaurant profile created yet."""
+        orphan_vendor = User.objects.create_user(**self.orphan_vendor_data)
+        self.client.force_authenticate(user=orphan_vendor)
+        
+        response = self.client.patch(self.url, {"is_open": True}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn("Restaurant profile not found", response.data['error'])
+
+    def test_unauthenticated_toggle_request(self):
+        """Test that unauthenticated requests are blocked."""
+        response = self.client.patch(self.url, {"is_open": True}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)

@@ -84,3 +84,7 @@ class FoodItemSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'category_name', 'created_at', 'updated_at']
+
+
+class RestaurantStatusSerializer(serializers.Serializer):
+    is_open = serializers.BooleanField(required=True)
