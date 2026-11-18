@@ -27,3 +27,6 @@ class RestaurantSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+class RestaurantStatusSerializer(serializers.Serializer):
+    is_open = serializers.BooleanField(required=True)

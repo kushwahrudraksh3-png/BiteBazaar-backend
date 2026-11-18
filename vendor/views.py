@@ -2,7 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 from .models import Restaurant, RestaurantTiming
-from .serializers import RestaurantSerializer, RestaurantTimingSerializer
+from .serializers import RestaurantSerializer, RestaurantTimingSerializer, RestaurantStatusSerializer
 
 
 class RestaurantProfileView(APIView):
@@ -159,5 +159,50 @@ class RestaurantTimingView(APIView):
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
+            
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+
+
+
+class ToggleRestaurantStatusView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def patch(self, request):
+        user = request.user
+        
+        # 1. Verify if user is a restaurant vendor
+        # (Assuming your User model has a role field where RESTAURENT is defined)
+        if hasattr(user, 'role') and user.role != getattr(user, 'RESTAURENT', 1):
+            return Response(
+                {"error": "Only registered restaurant vendors can perform this action."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # 2. Fetch the vendor's restaurant profile safely
+        try:
+            restaurant = user.restaurant_profile
+        except Restaurant.DoesNotExist:
+            return Response(
+                {"error": "Restaurant profile not found for this vendor account."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # 3. Validate and update status
+        serializer = RestaurantStatusSerializer(data=request.data)
+        if serializer.is_valid():
+            restaurant.is_open = serializer.validated_data['is_open']
+            restaurant.save()
+            
+            status_text = "Open (Accepting Orders)" if restaurant.is_open else "Closed"
+            return Response(
+                {
+                    "message": f"Restaurant status updated successfully to {status_text}.",
+                    "restaurant_id": restaurant.id,
+                    "restaurant_name": restaurant.restaurant_name,
+                    "is_open": restaurant.is_open
+                },
+                status=status.HTTP_200_OK
+            )
             
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
