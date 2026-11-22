@@ -1,16 +1,32 @@
+import hmac
+import hashlib
+from decimal import Decimal
+from unittest.mock import patch, MagicMock, PropertyMock
+
 from django.urls import reverse
+from django.test import override_settings
+from django.contrib.auth import get_user_model
 from rest_framework import status
 from rest_framework.test import APITestCase
-from django.contrib.auth import get_user_model
+
 from accounts.models import UserProfile
 from vendor.models import Restaurant, FoodItem, Category
 from customer.cart import Cart
 from orders.models import Order, SubOrder, OrderItem
 from orders.serializers import CheckoutSerializer
-from unittest.mock import patch
 
 User = get_user_model()
 
+
+class DummyRequest:
+    def __init__(self, user):
+        self.user = user
+
+
+@override_settings(
+    RAZORPAY_KEY_ID="rzp_test_mock_key",
+    RAZORPAY_KEY_SECRET="mock_secret_key_12345",
+)
 class CheckoutAPITests(APITestCase):
     def setUp(self):
         # 1. Create test customer
@@ -19,9 +35,9 @@ class CheckoutAPITests(APITestCase):
             email="customer@example.com",
             password="password123",
             first_name="Test",
-            last_name="Customer"
+            last_name="Customer",
         )
-        
+
         # Update profile directly in DB
         UserProfile.objects.filter(user=self.customer).update(
             address_line_1="104, Rajwada Chowk",
@@ -30,10 +46,10 @@ class CheckoutAPITests(APITestCase):
             country="India",
             pincode="452002",
             latitude="22.7533",
-            longitude="75.8937"
+            longitude="75.8937",
         )
         self.customer = User.objects.get(pk=self.customer.pk)
-        self.profile = self.customer.userprofile  # Reference for profile tests
+        self.profile = self.customer.userprofile
 
         # 2. Create test vendor, category, and food item
         self.vendor_user = User.objects.create_user(
@@ -41,190 +57,231 @@ class CheckoutAPITests(APITestCase):
             email="vendor@example.com",
             password="password123",
             first_name="Test",
-            last_name="Vendor"
+            last_name="Vendor",
         )
         self.restaurant = Restaurant.objects.create(
             user=self.vendor_user,
             restaurant_name="Nimadi Bhojan",
-            is_open=True
+            is_open=True,
         )
-        
+
         self.category = Category.objects.create(
             restaurant=self.restaurant,
-            name="Main Course"
+            name="Main Course",
         )
 
         self.food_item = FoodItem.objects.create(
             restaurant=self.restaurant,
             category=self.category,
             name="Dal Baati",
-            price=290.00,
-            is_available=True
+            price=Decimal("290.00"),
+            is_available=True,
         )
 
-        self.url = reverse('order-checkout')
+        self.url = reverse("order-checkout")
 
     def authenticate_customer(self):
         self.client.force_authenticate(user=self.customer)
 
-    def test_checkout_success(self):
-        """Test successful multi-vendor order placement from cart."""
-        self.authenticate_customer()
-
-        class DummyRequest:
-            def __init__(self, user):
-                self.user = user
-
+    def _setup_cart(self, quantity=2):
         cart = Cart(DummyRequest(self.customer))
         cart.clear()
-        cart.add(self.food_item, quantity=2)
+        if quantity > 0:
+            cart.add(self.food_item, quantity=quantity)
+        return cart
 
-        response = self.client.post(self.url, format='json')
-        
+    @patch("orders.views.razorpay.Client")
+    def test_checkout_upi_success(self, mock_rzp_cls):
+        """Test successful UPI order placement with financial breakdown and Razorpay order creation."""
+        self.authenticate_customer()
+        self._setup_cart(quantity=2)  # 2 * 290 = 580.00
+
+        mock_rzp_client = MagicMock()
+        mock_rzp_client.order.create.return_value = {"id": "order_rzp_test_123"}
+        mock_rzp_cls.return_value = mock_rzp_client
+
+        response = self.client.post(self.url, {"payment_method": "UPI"}, format="json")
+
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["message"], "Order initialized. Proceed to payment.")
         self.assertIn("order_id", response.data)
-        self.assertEqual(float(response.data['total_price']), 580.00)
-        self.assertEqual(len(response.data['sub_orders']), 1)
+        self.assertEqual(Decimal(str(response.data["item_total"])), Decimal("580.00"))
+        self.assertEqual(Decimal(str(response.data["restaurant_gst"])), Decimal("29.00"))  # 5% of 580
+        self.assertEqual(Decimal(str(response.data["delivery_fee"])), Decimal("30.00"))
+        self.assertEqual(Decimal(str(response.data["platform_fee"])), Decimal("5.00"))
+        self.assertEqual(Decimal(str(response.data["total_price"])), Decimal("644.00"))
+        self.assertEqual(len(response.data["sub_orders"]), 1)
+
+        # Razorpay fields check
+        self.assertEqual(response.data["razorpay_order_id"], "order_rzp_test_123")
+        self.assertEqual(response.data["razorpay_key_id"], "rzp_test_mock_key")
+        self.assertEqual(response.data["amount"], 64400)  # 644.00 * 100 paise
+        self.assertEqual(response.data["currency"], "INR")
+
+        # DB check
+        order = Order.objects.get(id=response.data["order_id"])
+        self.assertEqual(order.payment_status, "PENDING")
+        self.assertEqual(order.status, "PENDING")
+        self.assertEqual(order.razorpay_order_id, "order_rzp_test_123")
+        mock_rzp_client.order.create.assert_called_once()
+
+    @patch("orders.views.razorpay.Client")
+    def test_checkout_cash_success(self, mock_rzp_cls):
+        """Test successful CASH (COD) order placement without calling Razorpay."""
+        self.authenticate_customer()
+        self._setup_cart(quantity=1)  # 290.00
+
+        response = self.client.post(self.url, {"payment_method": "CASH"}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["message"], "Order placed successfully!")
+        self.assertNotIn("razorpay_order_id", response.data)
+
+        order = Order.objects.get(id=response.data["order_id"])
+        self.assertEqual(order.payment_method, "CASH")
+        self.assertEqual(order.payment_status, "COD")
+        self.assertEqual(order.status, "CONFIRMED")
+
+        sub_order = SubOrder.objects.get(order=order)
+        self.assertEqual(sub_order.status, "CONFIRMED")
+        mock_rzp_cls.assert_not_called()
+
+    def test_checkout_invalid_payment_method(self):
+        """Test checkout failure when an unsupported payment method is provided."""
+        self.authenticate_customer()
+        response = self.client.post(self.url, {"payment_method": "CRYPTO"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Invalid payment method", response.data["error"])
 
     def test_checkout_empty_cart(self):
         """Test checkout failure when cart is empty."""
         self.authenticate_customer()
+        self._setup_cart(quantity=0)
 
-        class DummyRequest:
-            def __init__(self, user):
-                self.user = user
-
-        cart = Cart(DummyRequest(self.customer))
-        cart.clear()
-
-        response = self.client.post(self.url, format='json')
-        
+        response = self.client.post(self.url, format="json")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data['error'], "Your cart is empty!")
+        self.assertEqual(response.data["error"], "Your cart is empty!")
 
     def test_checkout_incomplete_profile_address(self):
         """Test checkout failure when profile address is missing required fields."""
         self.authenticate_customer()
-        
-        # Update DB and refresh profile cache in memory
         UserProfile.objects.filter(user=self.customer).update(city="")
         self.customer.userprofile.refresh_from_db()
+        self._setup_cart(quantity=1)
 
-        class DummyRequest:
-            def __init__(self, user):
-                self.user = user
-
-        cart = Cart(DummyRequest(self.customer))
-        cart.clear()
-        cart.add(self.food_item, quantity=1)
-
-        response = self.client.post(self.url, format='json')
-        
+        response = self.client.post(self.url, format="json")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("Delivery address is incomplete", response.data['error'])
+        self.assertIn("Delivery address is incomplete", response.data["error"])
 
     def test_checkout_missing_profile(self):
         """Test checkout failure when user profile does not exist."""
         self.authenticate_customer()
 
-        # Mock user.userprofile property to raise UserProfile.DoesNotExist cleanly
-        with patch('accounts.models.UserProfile.DoesNotExist', Exception):
-            pass  # Just ensuring import/context
-
-        from unittest.mock import PropertyMock
-        with patch.object(type(self.customer), 'userprofile', new_callable=PropertyMock) as mock_profile:
+        with patch.object(
+            type(self.customer), "userprofile", new_callable=PropertyMock
+        ) as mock_profile:
             mock_profile.side_effect = UserProfile.DoesNotExist("Profile not found")
+            self._setup_cart(quantity=1)
 
-            class DummyRequest:
-                def __init__(self, user):
-                    self.user = user
-
-            cart = Cart(DummyRequest(self.customer))
-            cart.clear()
-            cart.add(self.food_item, quantity=1)
-
-            response = self.client.post(self.url, format='json')
+            response = self.client.post(self.url, format="json")
             self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-            self.assertEqual(response.data['error'], "Customer profile not found. Please complete your profile first.")
-    
+            self.assertEqual(
+                response.data["error"],
+                "Customer profile not found. Please complete your profile first.",
+            )
+
     def test_checkout_invalid_cart_item(self):
         """Test checkout failure when cart item lacks restaurant reference."""
         self.authenticate_customer()
-
-        class DummyRequest:
-            def __init__(self, user):
-                self.user = user
-
         cart = Cart(DummyRequest(self.customer))
         cart.clear()
         cart.cart[str(self.food_item.id)] = {
-            'quantity': 1,
-            'price': str(self.food_item.price),
-            'name': self.food_item.name,
-            'restaurant_id': None
+            "quantity": 1,
+            "price": str(self.food_item.price),
+            "name": self.food_item.name,
+            "restaurant_id": None,
         }
         cart.save()
 
-        response = self.client.post(self.url, format='json')
-        
+        response = self.client.post(self.url, format="json")
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("Invalid cart item data", response.data['error'])
+        self.assertIn("Invalid cart item data", response.data["error"])
 
-    def test_checkout_geodjango_exception_fallback(self):
+    @patch("orders.views.razorpay.Client")
+    def test_checkout_geodjango_exception_fallback(self, mock_rzp_cls):
         """Test graceful fallback when GeoDjango Point coordinates raise ValueError or TypeError."""
         self.authenticate_customer()
-        
-        # Set invalid latitude/longitude that causes float conversion or Point init to raise ValueError/TypeError
         UserProfile.objects.filter(user=self.customer).update(
-            latitude="invalid_lat", 
-            longitude="75.8937"
+            latitude="invalid_lat",
+            longitude="75.8937",
         )
         self.customer.userprofile.refresh_from_db()
+        self._setup_cart(quantity=1)
 
-        class DummyRequest:
-            def __init__(self, user):
-                self.user = user
+        mock_rzp_client = MagicMock()
+        mock_rzp_client.order.create.return_value = {"id": "order_rzp_geo_123"}
+        mock_rzp_cls.return_value = mock_rzp_client
 
-        cart = Cart(DummyRequest(self.customer))
-        cart.clear()
-        cart.add(self.food_item, quantity=1)
-
-        response = self.client.post(self.url, format='json')
-        # Even with invalid lat/lng, checkout should succeed with delivery_location = None (graceful fallback)
+        response = self.client.post(self.url, format="json")
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        
-    @patch('orders.views.Order.objects.create', side_effect=Exception("Database error"))
-    def test_checkout_server_error_500(self, mock_create):
-        """Test 500 internal server error handling during transaction atomic block."""
+        order = Order.objects.get(id=response.data["order_id"])
+        self.assertIsNone(order.delivery_location)
+
+    @patch("orders.views.razorpay.Client")
+    def test_checkout_razorpay_exception_500_and_rollback(self, mock_rzp_cls):
+        """Test 500 error handling and transaction rollback when Razorpay API fails."""
         self.authenticate_customer()
+        self._setup_cart(quantity=1)
 
-        class DummyRequest:
-            def __init__(self, user):
-                self.user = user
+        mock_rzp_client = MagicMock()
+        mock_rzp_client.order.create.side_effect = Exception("Razorpay Gateway Error")
+        mock_rzp_cls.return_value = mock_rzp_client
 
-        cart = Cart(DummyRequest(self.customer))
-        cart.clear()
-        cart.add(self.food_item, quantity=1)
-
-        response = self.client.post(self.url, format='json')
+        response = self.client.post(self.url, {"payment_method": "UPI"}, format="json")
         self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
-        self.assertIn("Order placement failed", response.data['error'])
+        self.assertIn("Order placement failed", response.data["error"])
+        self.assertEqual(Order.objects.count(), 0)
+        self.assertEqual(SubOrder.objects.count(), 0)
 
     def test_unauthenticated_checkout(self):
         """Test that unauthenticated requests are blocked."""
-        response = self.client.post(self.url, format='json')
+        response = self.client.post(self.url, format="json")
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_checkout_fails_restaurant_closed(self):
+        """Test checkout failure when restaurant is closed (is_open=False guard)."""
+        self.restaurant.is_open = False
+        self.restaurant.save()
+        self.authenticate_customer()
+        self._setup_cart(quantity=1)
+
+        response = self.client.post(self.url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("currently closed", response.data["error"])
+
+    def test_checkout_fails_food_item_unavailable(self):
+        """Test checkout failure when food item is out of stock (is_available=False guard)."""
+        self.food_item.is_available = False
+        self.food_item.save()
+        self.authenticate_customer()
+        self._setup_cart(quantity=1)
+
+        response = self.client.post(self.url, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("out of stock", response.data["error"])
 
     def test_models_str_and_serializers(self):
         """Test models __str__ methods (including deleted food item) and CheckoutSerializer coverage."""
-        serializer = CheckoutSerializer(data={'delivery_address': 'Indore', 'latitude': 22.75, 'longitude': 75.89})
+        serializer = CheckoutSerializer(
+            data={"delivery_address": "Indore", "latitude": 22.75, "longitude": 75.89}
+        )
         self.assertTrue(serializer.is_valid())
 
         order = Order.objects.create(
             customer=self.customer,
             total_price=290.00,
             delivery_address="Indore",
-            status='PENDING'
+            status="PENDING",
         )
         self.assertIn("Order #", str(order))
 
@@ -232,7 +289,7 @@ class CheckoutAPITests(APITestCase):
             order=order,
             vendor=self.restaurant,
             suborder_total=290.00,
-            status='PENDING'
+            status="PENDING",
         )
         self.assertIn("SubOrder #", str(sub_order))
 
@@ -240,7 +297,7 @@ class CheckoutAPITests(APITestCase):
             sub_order=sub_order,
             food_item=self.food_item,
             quantity=1,
-            price=290.00
+            price=290.00,
         )
         self.assertIn("Dal Baati", str(item_with_food))
 
@@ -248,42 +305,153 @@ class CheckoutAPITests(APITestCase):
             sub_order=sub_order,
             food_item=None,
             quantity=1,
-            price=290.00
+            price=290.00,
         )
         self.assertIn("Deleted Item", str(item_deleted_food))
 
-    def test_checkout_fails_restaurant_closed(self):
-        """Test checkout failure when restaurant is closed (is_open=False guard)."""
-        self.restaurant.is_open = False
-        self.restaurant.save()
-        self.authenticate_customer()
 
-        class DummyRequest:
-            def __init__(self, user):
-                self.user = user
+@override_settings(
+    RAZORPAY_KEY_ID="rzp_test_mock_key",
+    RAZORPAY_KEY_SECRET="mock_secret_key_12345",
+)
+class VerifyPaymentAPITests(APITestCase):
+    def setUp(self):
+        self.customer = User.objects.create_user(
+            username="verifycustomer",
+            email="verifycustomer@example.com",
+            password="password123",
+            first_name="Verify",
+            last_name="Customer",
+        )
+        self.vendor_user = User.objects.create_user(
+            username="verifyvendor",
+            email="verifyvendor@example.com",
+            password="password123",
+            first_name="Verify",
+            last_name="Vendor",
+        )
+        self.restaurant = Restaurant.objects.create(
+            user=self.vendor_user,
+            restaurant_name="Rajaram Dhaba",
+            is_open=True,
+        )
+        self.verify_url = reverse("verify-payment")
+        self.client.force_authenticate(user=self.customer)
 
-        cart = Cart(DummyRequest(self.customer))
-        cart.clear()
-        cart.add(self.food_item, quantity=1)
+    def _generate_valid_signature(self, order_id, payment_id):
+        message = f"{order_id}|{payment_id}".encode("utf-8")
+        secret = b"mock_secret_key_12345"
+        return hmac.new(secret, message, hashlib.sha256).hexdigest()
 
-        response = self.client.post(self.url, format='json')
+    def test_verify_payment_unauthenticated(self):
+        self.client.force_authenticate(user=None)
+        response = self.client.post(self.verify_url, {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_verify_payment_missing_parameters(self):
+        response = self.client.post(
+            self.verify_url,
+            {"razorpay_order_id": "order_123"},
+            format="json",
+        )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("currently closed", response.data['error'])
+        self.assertIn("Missing required payment verification parameters", response.data["error"])
 
-    def test_checkout_fails_food_item_unavailable(self):
-        """Test checkout failure when food item is out of stock (is_available=False guard)."""
-        self.food_item.is_available = False
-        self.food_item.save()
-        self.authenticate_customer()
+    def test_verify_payment_order_not_found(self):
+        response = self.client.post(
+            self.verify_url,
+            {
+                "razorpay_order_id": "order_does_not_exist",
+                "razorpay_payment_id": "pay_123",
+                "razorpay_signature": "sig_123",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertIn("Order not found", response.data["error"])
 
-        class DummyRequest:
-            def __init__(self, user):
-                self.user = user
+    def test_verify_payment_already_paid(self):
+        Order.objects.create(
+            customer=self.customer,
+            razorpay_order_id="order_already_paid_123",
+            payment_status="PAID",
+            status="ACCEPTED",
+            delivery_address="Indore",
+        )
+        response = self.client.post(
+            self.verify_url,
+            {
+                "razorpay_order_id": "order_already_paid_123",
+                "razorpay_payment_id": "pay_123",
+                "razorpay_signature": "any_sig",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("Payment already verified", response.data["message"])
 
-        cart = Cart(DummyRequest(self.customer))
-        cart.clear()
-        cart.add(self.food_item, quantity=1)
+    def test_verify_payment_valid_signature_success(self):
+        order = Order.objects.create(
+            customer=self.customer,
+            razorpay_order_id="order_valid_999",
+            payment_status="PENDING",
+            status="PENDING",
+            delivery_address="Indore",
+        )
+        sub_order = SubOrder.objects.create(
+            order=order,
+            vendor=self.restaurant,
+            suborder_total=Decimal("300.00"),
+            status="PENDING",
+        )
 
-        response = self.client.post(self.url, format='json')
+        payment_id = "pay_valid_999"
+        valid_sig = self._generate_valid_signature("order_valid_999", payment_id)
+
+        response = self.client.post(
+            self.verify_url,
+            {
+                "razorpay_order_id": "order_valid_999",
+                "razorpay_payment_id": payment_id,
+                "razorpay_signature": valid_sig,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["payment_status"], "PAID")
+        self.assertEqual(response.data["order_status"], "ACCEPTED")
+
+        order.refresh_from_db()
+        sub_order.refresh_from_db()
+        self.assertEqual(order.payment_status, "PAID")
+        self.assertEqual(order.status, "ACCEPTED")
+        self.assertEqual(order.razorpay_payment_id, payment_id)
+        self.assertEqual(order.razorpay_signature, valid_sig)
+        self.assertEqual(sub_order.status, "ACCEPTED")
+
+    def test_verify_payment_invalid_signature_fails(self):
+        order = Order.objects.create(
+            customer=self.customer,
+            razorpay_order_id="order_tampered_999",
+            payment_status="PENDING",
+            status="PENDING",
+            delivery_address="Indore",
+        )
+
+        response = self.client.post(
+            self.verify_url,
+            {
+                "razorpay_order_id": "order_tampered_999",
+                "razorpay_payment_id": "pay_fake_999",
+                "razorpay_signature": "invalid_signature_hash",
+            },
+            format="json",
+        )
+
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("out of stock", response.data['error'])
+        self.assertIn("Invalid signature", response.data["error"])
+
+        order.refresh_from_db()
+        self.assertEqual(order.payment_status, "FAILED")
+        self.assertEqual(order.status, "CANCELLED")

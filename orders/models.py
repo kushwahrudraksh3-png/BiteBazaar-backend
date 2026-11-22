@@ -6,14 +6,43 @@ from django.contrib.gis.db import models as gis_models  # GeoDjango for PostGIS
 User = get_user_model()
 
 class Order(models.Model):
-    STATUS_CHOICES = (
+    PAYMENT_METHOD_CHOICES = (
+        ('UPI', 'UPI'),
+        ('CASH', 'Cash on Delivery'),
+    )
+    
+    PAYMENT_STATUS_CHOICES = (
         ('PENDING', 'Pending'),
         ('PAID', 'Paid'),
+        ('COD', 'Cash on Delivery (Pending Collection)'),
+        ('FAILED', 'Failed'),
+    )
+
+    STATUS_CHOICES = (
+        ('PENDING', 'Pending'),
+        ('CONFIRMED', 'Confirmed'),
+        ('PREPARING', 'Preparing'),
+        ('OUT_FOR_DELIVERY', 'Out for Delivery'),
+        ('DELIVERed', 'Delivered'),
         ('CANCELLED', 'Cancelled'),
     )
 
     customer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='orders')
-    total_price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    
+    # Financial Breakdown Fields (New)
+    item_total = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)     # Base price of items
+    restaurant_gst = models.DecimalField(max_digits=10, decimal_places=2, default=0.00) # Govt GST on food
+    delivery_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)   # Delivery charge
+    platform_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)   # BiteBazaar platform fee
+    total_price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)    # Final Grand Total (Customer pays this)
+
+    # Payment & Gateway Fields (New)
+    payment_method = models.CharField(max_length=10, choices=PAYMENT_METHOD_CHOICES, default='UPI')
+    payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default='PENDING')
+    razorpay_order_id = models.CharField(max_length=100, blank=True, null=True)
+    razorpay_payment_id = models.CharField(max_length=100, blank=True, null=True)
+    razorpay_signature = models.CharField(max_length=250, blank=True, null=True)
+
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
     
     # Delivery location using GeoDjango for PostGIS distance/tracking
@@ -24,9 +53,7 @@ class Order(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"Order #{self.id} - {self.customer.email} [{self.status}]"
-    
-
+        return f"Order #{self.id} - {self.customer.email} [{self.status}] ({self.payment_method})"
 
 
 
@@ -44,6 +71,10 @@ class SubOrder(models.Model):
     vendor = models.ForeignKey(Restaurant, on_delete=models.CASCADE, related_name='sub_orders')
     suborder_total = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     status = models.CharField(max_length=25, choices=STATUS_CHOICES, default='PENDING')
+    
+    # 🌟 Yeh 2 naye fields add karne hain:
+    admin_commission = models.DecimalField(max_digits=10, decimal_places=2, default=0.00) # BiteBazaar ki earning snapshot
+    vendor_payout = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)     # Restaurant ko milne wala paisa snapshot
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

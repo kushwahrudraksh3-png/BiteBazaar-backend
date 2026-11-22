@@ -29,6 +29,11 @@ class Restaurant(models.Model):
     address = models.CharField(max_length=255, blank=True, null=True)
     
     is_open = models.BooleanField(default=False)
+    
+    commission_percentage = models.DecimalField(
+        max_digits=5, decimal_places=2, default=10.00
+    )
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
