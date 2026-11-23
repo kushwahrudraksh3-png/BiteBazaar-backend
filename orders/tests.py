@@ -599,5 +599,235 @@ class InvoiceAndEmailUtilsTests(APITestCase):
         self.assertFalse(result)
         self.assertEqual(len(mail.outbox), 0)
         
-        
+
+
+class VendorOrderFlowAPITests(APITestCase):
+    def setUp(self):
+        # 1. Customer
+        self.customer = User.objects.create_user(
+            username="flowcustomer",
+            email="flowcustomer@example.com",
+            password="password123",
+            first_name="Flow",
+            last_name="Customer",
+        )
+
+        # 2. Vendor 1 (Main Restaurant)
+        self.vendor_user = User.objects.create_user(
+            username="flowvendor1",
+            email="flowvendor1@example.com",
+            password="password123",
+            first_name="Vendor",
+            last_name="One",
+        )
+        self.restaurant = Restaurant.objects.create(
+            user=self.vendor_user,
+            restaurant_name="Malwa Kitchen",
+            fssai_license_number="FSSAI100000001",
+            is_open=True,
+        )
+        self.category = Category.objects.create(
+            restaurant=self.restaurant,
+            name="Main Course",
+        )
+        self.food_item = FoodItem.objects.create(
+            restaurant=self.restaurant,
+            category=self.category,
+            name="Poha Jalebi",
+            price=Decimal("100.00"),
+            is_available=True,
+        )
+
+        # 3. Vendor 2 (Other Restaurant - Ownership isolation check ke liye)
+        self.other_vendor_user = User.objects.create_user(
+            username="flowvendor2",
+            email="flowvendor2@example.com",
+            password="password123",
+            first_name="Vendor",
+            last_name="Two",
+        )
+        self.other_restaurant = Restaurant.objects.create(
+            user=self.other_vendor_user,
+            restaurant_name="Indori Zaika",
+            is_open=True,
+        )
+
+        # 4. Orders & SubOrders
+        self.order = Order.objects.create(
+            customer=self.customer,
+            total_price=Decimal("250.00"),
+            payment_method="CASH",
+            payment_status="COD",
+            status="CONFIRMED",
+            delivery_address="Vijay Nagar, Indore",
+        )
+        self.sub_order = SubOrder.objects.create(
+            order=self.order,
+            vendor=self.restaurant,
+            suborder_total=Decimal("200.00"),
+            status="CONFIRMED",
+        )
+        OrderItem.objects.create(
+            sub_order=self.sub_order,
+            food_item=self.food_item,
+            quantity=2,
+            price=Decimal("100.00"),
+        )
+        # Deleted food item coverage in OrderItemSerializer
+        OrderItem.objects.create(
+            sub_order=self.sub_order,
+            food_item=None,
+            quantity=1,
+            price=Decimal("50.00"),
+        )
+
+        # Other vendor's sub_order
+        self.other_order = Order.objects.create(
+            customer=self.customer,
+            total_price=Decimal("150.00"),
+            payment_method="UPI",
+            payment_status="PAID",
+            status="ACCEPTED",
+            delivery_address="Palasia, Indore",
+        )
+        self.other_sub_order = SubOrder.objects.create(
+            order=self.other_order,
+            vendor=self.other_restaurant,
+            suborder_total=Decimal("150.00"),
+            status="ACCEPTED",
+        )
+
+        self.list_url = reverse("vendor-order-list")
+
+    def _status_url(self, sub_order_id):
+        return reverse(
+            "vendor-suborder-status-update",
+            kwargs={"sub_order_id": sub_order_id},
+        )
+
+    # --- LIST API TESTS ---
+
+    def test_vendor_list_unauthenticated(self):
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_vendor_list_forbidden_for_non_vendor(self):
+        self.client.force_authenticate(user=self.customer)
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("No restaurant associated", response.data["error"])
+
+    def test_vendor_list_returns_only_own_orders_and_nested_items(self):
+        self.client.force_authenticate(user=self.vendor_user)
+        response = self.client.get(self.list_url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["id"], self.sub_order.id)
+        self.assertEqual(response.data[0]["customer_email"], "flowcustomer@example.com")
+
+        item_names = [item["food_item_name"] for item in response.data[0]["items"]]
+        self.assertIn("Poha Jalebi", item_names)
+        self.assertIn("Deleted Item", item_names)
+
+    def test_vendor_list_status_filter(self):
+        self.client.force_authenticate(user=self.vendor_user)
+
+        res_match = self.client.get(f"{self.list_url}?status=confirmed")
+        self.assertEqual(res_match.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res_match.data), 1)
+
+        res_empty = self.client.get(f"{self.list_url}?status=PREPARING")
+        self.assertEqual(res_empty.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res_empty.data), 0)
+
+    # --- STATUS UPDATE (PATCH) API TESTS ---
+
+    def test_status_update_unauthenticated(self):
+        response = self.client.patch(
+            self._status_url(self.sub_order.id), {"status": "ACCEPTED"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_status_update_forbidden_for_non_vendor(self):
+        self.client.force_authenticate(user=self.customer)
+        response = self.client.patch(
+            self._status_url(self.sub_order.id), {"status": "ACCEPTED"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_status_update_other_vendor_suborder_returns_404(self):
+        self.client.force_authenticate(user=self.vendor_user)
+        response = self.client.patch(
+            self._status_url(self.other_sub_order.id),
+            {"status": "PREPARING"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_status_update_missing_status_field(self):
+        self.client.force_authenticate(user=self.vendor_user)
+        response = self.client.patch(
+            self._status_url(self.sub_order.id), {}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Status field is required", response.data["error"])
+
+    def test_status_update_invalid_transition(self):
+        self.client.force_authenticate(user=self.vendor_user)
+        # CONFIRMED -> READY_FOR_PICKUP direct jump allowed nahi hai
+        response = self.client.patch(
+            self._status_url(self.sub_order.id),
+            {"status": "READY_FOR_PICKUP"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Invalid status transition", response.data["error"])
+        self.assertEqual(response.data["allowed_transitions"], ["ACCEPTED", "REJECTED"])
+
+    def test_status_update_full_kitchen_flow_and_master_sync(self):
+        """CONFIRMED -> ACCEPTED -> PREPARING -> READY_FOR_PICKUP + master order sync."""
+        self.client.force_authenticate(user=self.vendor_user)
+
+        # 1. CONFIRMED -> ACCEPTED
+        res1 = self.client.patch(
+            self._status_url(self.sub_order.id), {"status": "ACCEPTED"}, format="json"
+        )
+        self.assertEqual(res1.status_code, status.HTTP_200_OK)
+        self.assertEqual(res1.data["sub_order_status"], "ACCEPTED")
+        self.assertEqual(res1.data["master_order_status"], "ACCEPTED")
+
+        # 2. ACCEPTED -> PREPARING
+        res2 = self.client.patch(
+            self._status_url(self.sub_order.id), {"status": "PREPARING"}, format="json"
+        )
+        self.assertEqual(res2.status_code, status.HTTP_200_OK)
+        self.assertEqual(res2.data["sub_order_status"], "PREPARING")
+        self.assertEqual(res2.data["master_order_status"], "PREPARING")
+
+        # 3. PREPARING -> READY_FOR_PICKUP
+        res3 = self.client.patch(
+            self._status_url(self.sub_order.id),
+            {"status": "READY_FOR_PICKUP"},
+            format="json",
+        )
+        self.assertEqual(res3.status_code, status.HTTP_200_OK)
+        self.assertEqual(res3.data["sub_order_status"], "READY_FOR_PICKUP")
+        self.assertEqual(res3.data["master_order_status"], "READY_FOR_PICKUP")
+
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, "READY_FOR_PICKUP")
+
+    def test_status_update_rejected_syncs_master_order(self):
+        """CONFIRMED -> REJECTED hone par master order bhi REJECTED hona chahiye."""
+        self.client.force_authenticate(user=self.vendor_user)
+        response = self.client.patch(
+            self._status_url(self.sub_order.id), {"status": "REJECTED"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["sub_order_status"], "REJECTED")
+        self.assertEqual(response.data["master_order_status"], "REJECTED")
+
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.status, "REJECTED")
         

@@ -18,6 +18,18 @@ import hmac
 import hashlib
 from orders.utils import send_order_receipt_email
 
+
+from orders.serializers import VendorSubOrderSerializer
+
+
+
+
+
+
+
+
+
+
 class CheckoutAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -300,3 +312,106 @@ class VerifyPaymentAPIView(APIView):
                 {"error": "Payment verification failed. Invalid signature."},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+
+class VendorSubOrderListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # 1. Check karo ki logged-in user koi restaurant owner hai ya nahi
+        restaurant = Restaurant.objects.filter(user=request.user).first()
+        if not restaurant:
+            return Response(
+                {"error": "No restaurant associated with this account."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # 2. Sirf isi restaurant ke SubOrders fetch karo (optimized query)
+        sub_orders = (
+            SubOrder.objects.filter(vendor=restaurant)
+            .select_related('order', 'order__customer')
+            .prefetch_related('items', 'items__food_item')
+            .order_by('-created_at')
+        )
+
+        # 3. Optional status filter: e.g., /api/orders/vendor/orders/?status=ACCEPTED
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            sub_orders = sub_orders.filter(status=status_filter.upper())
+
+        serializer = VendorSubOrderSerializer(sub_orders, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+
+class VendorSubOrderStatusUpdateAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    # Strict allowed transitions (unpaid PENDING orders ko vendor touch nahi kar sakta)
+    ALLOWED_TRANSITIONS = {
+        'CONFIRMED': ['ACCEPTED', 'REJECTED'],
+        'ACCEPTED': ['PREPARING', 'REJECTED'],
+        'PREPARING': ['READY_FOR_PICKUP'],
+    }
+
+    def patch(self, request, sub_order_id):
+        # 1. Check karo ki logged-in user vendor hai ya nahi
+        restaurant = Restaurant.objects.filter(user=request.user).first()
+        if not restaurant:
+            return Response(
+                {"error": "No restaurant associated with this account."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # 2. Ownership check: sirf isi restaurant ka sub_order milega, warna 404
+        sub_order = get_object_or_404(SubOrder, id=sub_order_id, vendor=restaurant)
+
+        new_status = request.data.get('status')
+        if not new_status:
+            return Response(
+                {"error": "Status field is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        new_status = new_status.upper()
+        allowed_next_states = self.ALLOWED_TRANSITIONS.get(sub_order.status, [])
+
+        # 3. Validate transition
+        if new_status not in allowed_next_states:
+            return Response(
+                {
+                    "error": f"Invalid status transition from '{sub_order.status}' to '{new_status}'.",
+                    "allowed_transitions": allowed_next_states,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # 4. Atomic update: SubOrder + Master Order sync
+        with transaction.atomic():
+            sub_order.status = new_status
+            sub_order.save()
+
+            master_order = sub_order.order
+            all_sub_statuses = list(
+                master_order.sub_orders.values_list('status', flat=True)
+            )
+
+            if all(s == 'REJECTED' for s in all_sub_statuses):
+                master_order.status = 'REJECTED'
+            elif all(s == 'READY_FOR_PICKUP' for s in all_sub_statuses):
+                master_order.status = 'READY_FOR_PICKUP'
+            elif any(s == 'PREPARING' for s in all_sub_statuses):
+                master_order.status = 'PREPARING'
+            elif any(s == 'ACCEPTED' for s in all_sub_statuses):
+                master_order.status = 'ACCEPTED'
+
+            master_order.save()
+
+        return Response(
+            {
+                "message": f"SubOrder #{sub_order.id} updated to {new_status}.",
+                "sub_order_id": sub_order.id,
+                "sub_order_status": sub_order.status,
+                "master_order_status": master_order.status,
+            },
+            status=status.HTTP_200_OK,
+        )

@@ -1,5 +1,5 @@
 from django.urls import path
-from orders.views import CheckoutAPIView, VerifyPaymentAPIView
+from orders.views import CheckoutAPIView, VerifyPaymentAPIView, VendorSubOrderListAPIView
 
 urlpatterns = [
     path('checkout/', CheckoutAPIView.as_view(), name='order-checkout'),
