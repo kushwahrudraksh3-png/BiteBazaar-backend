@@ -831,3 +831,139 @@ class VendorOrderFlowAPITests(APITestCase):
         self.order.refresh_from_db()
         self.assertEqual(self.order.status, "REJECTED")
         
+
+
+class CustomerOrderHistoryAPITests(APITestCase):
+    def setUp(self):
+        # 1. Main Customer
+        self.customer = User.objects.create_user(
+            username="histcustomer1",
+            email="histcustomer1@example.com",
+            password="password123",
+            first_name="Hist",
+            last_name="One",
+        )
+
+        # 2. Other Customer (Ownership isolation check ke liye)
+        self.other_customer = User.objects.create_user(
+            username="histcustomer2",
+            email="histcustomer2@example.com",
+            password="password123",
+            first_name="Hist",
+            last_name="Two",
+        )
+
+        # 3. Vendor & FoodItem
+        self.vendor_user = User.objects.create_user(
+            username="histvendor",
+            email="histvendor@example.com",
+            password="password123",
+            first_name="Hist",
+            last_name="Vendor",
+        )
+        self.restaurant = Restaurant.objects.create(
+            user=self.vendor_user,
+            restaurant_name="Chappan Bhog",
+            fssai_license_number="FSSAI200000001",
+            is_open=True,
+        )
+        self.category = Category.objects.create(
+            restaurant=self.restaurant,
+            name="Snacks",
+        )
+        self.food_item = FoodItem.objects.create(
+            restaurant=self.restaurant,
+            category=self.category,
+            name="Indori Kachori",
+            price=Decimal("40.00"),
+            is_available=True,
+        )
+
+        # 4. Main Customer's Order
+        self.order = Order.objects.create(
+            customer=self.customer,
+            total_price=Decimal("100.00"),
+            payment_method="UPI",
+            payment_status="PAID",
+            status="PREPARING",
+            delivery_address="Palasia, Indore",
+        )
+        self.sub_order = SubOrder.objects.create(
+            order=self.order,
+            vendor=self.restaurant,
+            suborder_total=Decimal("80.00"),
+            status="PREPARING",
+        )
+        OrderItem.objects.create(
+            sub_order=self.sub_order,
+            food_item=self.food_item,
+            quantity=2,
+            price=Decimal("40.00"),
+        )
+
+        # 5. Other Customer's Order
+        self.other_order = Order.objects.create(
+            customer=self.other_customer,
+            total_price=Decimal("200.00"),
+            payment_method="CASH",
+            payment_status="COD",
+            status="CONFIRMED",
+            delivery_address="Bhawarkua, Indore",
+        )
+
+        self.list_url = reverse("customer-order-list")
+
+    def _detail_url(self, order_id):
+        return reverse("customer-order-detail", kwargs={"order_id": order_id})
+
+    # --- LIST API TESTS ---
+
+    def test_customer_order_list_unauthenticated(self):
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_customer_order_list_returns_only_own_orders(self):
+        self.client.force_authenticate(user=self.customer)
+        response = self.client.get(self.list_url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]["id"], self.order.id)
+        self.assertEqual(
+            response.data[0]["sub_orders"][0]["restaurant_name"], "Chappan Bhog"
+        )
+        self.assertEqual(
+            response.data[0]["sub_orders"][0]["items"][0]["food_item_name"],
+            "Indori Kachori",
+        )
+
+    def test_customer_order_list_status_filter(self):
+        self.client.force_authenticate(user=self.customer)
+
+        res_match = self.client.get(f"{self.list_url}?status=preparing")
+        self.assertEqual(res_match.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res_match.data), 1)
+
+        res_empty = self.client.get(f"{self.list_url}?status=DELIVERED")
+        self.assertEqual(res_empty.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res_empty.data), 0)
+
+    # --- DETAIL API TESTS ---
+
+    def test_customer_order_detail_unauthenticated(self):
+        response = self.client.get(self._detail_url(self.order.id))
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_customer_order_detail_success(self):
+        self.client.force_authenticate(user=self.customer)
+        response = self.client.get(self._detail_url(self.order.id))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["id"], self.order.id)
+        self.assertEqual(response.data["status"], "PREPARING")
+        self.assertEqual(len(response.data["sub_orders"]), 1)
+
+    def test_customer_order_detail_other_customer_returns_404(self):
+        self.client.force_authenticate(user=self.customer)
+        response = self.client.get(self._detail_url(self.other_order.id))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
