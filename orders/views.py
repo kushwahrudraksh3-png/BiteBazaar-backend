@@ -19,7 +19,7 @@ import hashlib
 from orders.utils import send_order_receipt_email
 
 
-from orders.serializers import VendorSubOrderSerializer
+from orders.serializers import VendorSubOrderSerializer,CustomerOrderSerializer
 
 
 
@@ -415,3 +415,45 @@ class VendorSubOrderStatusUpdateAPIView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class CustomerOrderListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # 1. Sirf logged-in customer ke orders fetch karo (optimized query)
+        orders = (
+            Order.objects.filter(customer=request.user)
+            .prefetch_related(
+                'sub_orders',
+                'sub_orders__vendor',
+                'sub_orders__items',
+                'sub_orders__items__food_item',
+            )
+            .order_by('-created_at')
+        )
+
+        # 2. Optional status filter: e.g., /api/orders/my-orders/?status=DELIVERED
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            orders = orders.filter(status=status_filter.upper())
+
+        serializer = CustomerOrderSerializer(orders, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class CustomerOrderDetailAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, order_id):
+        # Ownership check: customer sirf apna hi order dekh sakta hai, warna 404
+        queryset = Order.objects.prefetch_related(
+            'sub_orders',
+            'sub_orders__vendor',
+            'sub_orders__items',
+            'sub_orders__items__food_item',
+        )
+        order = get_object_or_404(queryset, id=order_id, customer=request.user)
+
+        serializer = CustomerOrderSerializer(order)
+        return Response(serializer.data, status=status.HTTP_200_OK)

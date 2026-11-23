@@ -46,3 +46,41 @@ class VendorSubOrderSerializer(serializers.ModelSerializer):
             'updated_at',
         ]
         
+
+
+class CustomerSubOrderSerializer(serializers.ModelSerializer):
+    restaurant_name = serializers.CharField(source='vendor.restaurant_name', read_only=True)
+    items = OrderItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = SubOrder
+        fields = [
+            'id',
+            'restaurant_name',
+            'status',
+            'suborder_total',
+            'items',
+            'updated_at',
+        ]
+
+
+class CustomerOrderSerializer(serializers.ModelSerializer):
+    sub_orders = CustomerSubOrderSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Order
+        fields = [
+            'id',
+            'status',
+            'payment_method',
+            'payment_status',
+            'item_total',
+            'restaurant_gst',
+            'delivery_fee',
+            'platform_fee',
+            'total_price',
+            'delivery_address',
+            'sub_orders',
+            'created_at',
+            'updated_at',
+        ]
