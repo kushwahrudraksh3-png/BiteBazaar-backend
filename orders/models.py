@@ -21,9 +21,12 @@ class Order(models.Model):
     STATUS_CHOICES = (
         ('PENDING', 'Pending'),
         ('CONFIRMED', 'Confirmed'),
+        ('ACCEPTED', 'Accepted'),
         ('PREPARING', 'Preparing'),
+        ('READY_FOR_PICKUP', 'Ready for Pickup'),
         ('OUT_FOR_DELIVERY', 'Out for Delivery'),
-        ('DELIVERed', 'Delivered'),
+        ('DELIVERED', 'Delivered'),
+        ('REJECTED', 'Rejected'),
         ('CANCELLED', 'Cancelled'),
     )
 
@@ -60,10 +63,13 @@ class Order(models.Model):
 class SubOrder(models.Model):
     STATUS_CHOICES = (
         ('PENDING', 'Pending'),
+        ('CONFIRMED', 'Confirmed'),
         ('ACCEPTED', 'Accepted'),
         ('PREPARING', 'Preparing'),
+        ('READY_FOR_PICKUP', 'Ready for Pickup'),
         ('OUT_FOR_DELIVERY', 'Out for Delivery'),
         ('DELIVERED', 'Delivered'),
+        ('REJECTED', 'Rejected'),
         ('CANCELLED', 'Cancelled'),
     )
 

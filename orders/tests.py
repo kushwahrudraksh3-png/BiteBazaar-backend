@@ -15,6 +15,9 @@ from customer.cart import Cart
 from orders.models import Order, SubOrder, OrderItem
 from orders.serializers import CheckoutSerializer
 
+from django.core import mail
+from orders.utils import generate_invoice_pdf, send_order_receipt_email
+
 User = get_user_model()
 
 
@@ -390,7 +393,35 @@ class VerifyPaymentAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn("Payment already verified", response.data["message"])
 
-    def test_verify_payment_valid_signature_success(self):
+
+    def test_verify_payment_invalid_signature_fails(self):
+        order = Order.objects.create(
+            customer=self.customer,
+            razorpay_order_id="order_tampered_999",
+            payment_status="PENDING",
+            status="PENDING",
+            delivery_address="Indore",
+        )
+
+        response = self.client.post(
+            self.verify_url,
+            {
+                "razorpay_order_id": "order_tampered_999",
+                "razorpay_payment_id": "pay_fake_999",
+                "razorpay_signature": "invalid_signature_hash",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Invalid signature", response.data["error"])
+
+        order.refresh_from_db()
+        self.assertEqual(order.payment_status, "FAILED")
+        self.assertEqual(order.status, "CANCELLED")
+        
+    @patch("orders.views.send_order_receipt_email")
+    def test_verify_payment_valid_signature_success(self, mock_send_email):
         order = Order.objects.create(
             customer=self.customer,
             razorpay_order_id="order_valid_999",
@@ -429,29 +460,144 @@ class VerifyPaymentAPITests(APITestCase):
         self.assertEqual(order.razorpay_payment_id, payment_id)
         self.assertEqual(order.razorpay_signature, valid_sig)
         self.assertEqual(sub_order.status, "ACCEPTED")
+        mock_send_email.assert_called_once_with(order)
 
-    def test_verify_payment_invalid_signature_fails(self):
+    @patch("orders.views.send_order_receipt_email", side_effect=Exception("SMTP Down"))
+    def test_verify_payment_email_failure_does_not_break_verification(self, mock_send_email):
+        """Agar email bhejte waqt SMTP error aaye, tab bhi payment verify aur order confirm hona chahiye."""
         order = Order.objects.create(
             customer=self.customer,
-            razorpay_order_id="order_tampered_999",
+            razorpay_order_id="order_smtp_fail_999",
             payment_status="PENDING",
             status="PENDING",
             delivery_address="Indore",
         )
 
+        payment_id = "pay_smtp_999"
+        valid_sig = self._generate_valid_signature("order_smtp_fail_999", payment_id)
+
         response = self.client.post(
             self.verify_url,
             {
-                "razorpay_order_id": "order_tampered_999",
-                "razorpay_payment_id": "pay_fake_999",
-                "razorpay_signature": "invalid_signature_hash",
+                "razorpay_order_id": "order_smtp_fail_999",
+                "razorpay_payment_id": payment_id,
+                "razorpay_signature": valid_sig,
             },
             format="json",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("Invalid signature", response.data["error"])
-
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
         order.refresh_from_db()
-        self.assertEqual(order.payment_status, "FAILED")
-        self.assertEqual(order.status, "CANCELLED")
+        self.assertEqual(order.payment_status, "PAID")
+        self.assertEqual(order.status, "ACCEPTED")
+        mock_send_email.assert_called_once_with(order)
+        
+
+
+@override_settings(
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    DEFAULT_FROM_EMAIL="noreply@bitebazaar.com",
+)
+class InvoiceAndEmailUtilsTests(APITestCase):
+    def setUp(self):
+        self.customer = User.objects.create_user(
+            username="pdfcustomer",
+            email="pdfcustomer@example.com",
+            password="password123",
+            first_name="Rudraksh",
+            last_name="Kushwah",
+        )
+        self.vendor_user = User.objects.create_user(
+            username="pdfvendor",
+            email="pdfvendor@example.com",
+            password="password123",
+            first_name="Vendor",
+            last_name="User",
+        )
+        self.restaurant = Restaurant.objects.create(
+            user=self.vendor_user,
+            restaurant_name="Nimadi Bhojan",
+            is_open=True,
+        )
+        self.category = Category.objects.create(
+            restaurant=self.restaurant,
+            name="Main Course",
+        )
+        self.food_item = FoodItem.objects.create(
+            restaurant=self.restaurant,
+            category=self.category,
+            name="Dal Baati",
+            price=Decimal("200.00"),
+            is_available=True,
+        )
+        self.order = Order.objects.create(
+            customer=self.customer,
+            item_total=Decimal("400.00"),
+            restaurant_gst=Decimal("20.00"),
+            delivery_fee=Decimal("30.00"),
+            platform_fee=Decimal("5.00"),
+            total_price=Decimal("455.00"),
+            payment_method="UPI",
+            payment_status="PAID",
+            razorpay_payment_id="pay_test_pdf_123",
+            status="ACCEPTED",
+            delivery_address="104, Rajwada Chowk, Indore",
+        )
+        self.sub_order = SubOrder.objects.create(
+            order=self.order,
+            vendor=self.restaurant,
+            suborder_total=Decimal("400.00"),
+            status="ACCEPTED",
+        )
+        OrderItem.objects.create(
+            sub_order=self.sub_order,
+            food_item=self.food_item,
+            quantity=2,
+            price=Decimal("200.00"),
+        )
+        # Deleted food item edge case
+        OrderItem.objects.create(
+            sub_order=self.sub_order,
+            food_item=None,
+            quantity=1,
+            price=Decimal("50.00"),
+        )
+
+    def test_generate_invoice_pdf_success(self):
+        """Valid PDF bytes generate hone chahiye (normal aur deleted item dono ke saath)."""
+        pdf_bytes = generate_invoice_pdf(self.order)
+        self.assertIsNotNone(pdf_bytes)
+        self.assertTrue(pdf_bytes.startswith(b"%PDF"))
+
+    @patch("orders.utils.pisa.CreatePDF")
+    def test_generate_invoice_pdf_error_returns_none(self, mock_create_pdf):
+        """Agar xhtml2pdf error return kare, toh None aana chahiye."""
+        mock_create_pdf.return_value = MagicMock(err=1)
+        pdf_bytes = generate_invoice_pdf(self.order)
+        self.assertIsNone(pdf_bytes)
+
+    def test_send_order_receipt_email_success(self):
+        """Email outbox mein PDF attachment ke saath send hona chahiye."""
+        result = send_order_receipt_email(self.order)
+        self.assertTrue(result)
+        self.assertEqual(len(mail.outbox), 1)
+
+        sent_email = mail.outbox[0]
+        self.assertEqual(sent_email.to, ["pdfcustomer@example.com"])
+        self.assertIn(f"Order #{self.order.id}", sent_email.subject)
+        self.assertEqual(len(sent_email.attachments), 1)
+
+        filename, content, mimetype = sent_email.attachments[0]
+        self.assertEqual(filename, f"BiteBazaar_Invoice_Order_{self.order.id}.pdf")
+        self.assertEqual(mimetype, "application/pdf")
+        self.assertTrue(content.startswith(b"%PDF"))
+
+    @patch("orders.utils.generate_invoice_pdf", return_value=None)
+    def test_send_order_receipt_email_fails_when_pdf_is_none(self, mock_pdf):
+        """Agar PDF generation fail ho, toh email nahi jana chahiye aur False return ho."""
+        result = send_order_receipt_email(self.order)
+        self.assertFalse(result)
+        self.assertEqual(len(mail.outbox), 0)
+        
+        
+        

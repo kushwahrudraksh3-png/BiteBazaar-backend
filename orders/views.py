@@ -16,7 +16,7 @@ from customer.cart import Cart
 
 import hmac
 import hashlib
-
+from orders.utils import send_order_receipt_email
 
 class CheckoutAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -270,6 +270,7 @@ class VerifyPaymentAPIView(APIView):
 
         if hmac.compare_digest(generated_signature, razorpay_signature):
             with transaction.atomic():
+                
                 order.payment_status = 'PAID'
                 order.razorpay_payment_id = razorpay_payment_id
                 order.razorpay_signature = razorpay_signature
@@ -278,6 +279,11 @@ class VerifyPaymentAPIView(APIView):
 
                 # Associated SubOrders ka status bhi update kar do
                 order.sub_orders.all().update(status='ACCEPTED')
+                
+                try:
+                    send_order_receipt_email(order)
+                except Exception as e:
+                    print(f"Failed to send receipt email for Order #{order.id}: {e}")
 
             return Response({
                 "message": "Payment verified successfully and order confirmed!",

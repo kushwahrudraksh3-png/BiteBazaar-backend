@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body { font-family: Helvetica, Arial, sans-serif; color: #333; font-size: 12px; }
+        .header { text-align: center; border-bottom: 2px solid #ff5722; padding-bottom: 10px; margin-bottom: 20px; }
+        .header h1 { color: #ff5722; margin: 0; font-size: 24px; }
+        .meta-table { width: 100%; margin-bottom: 20px; }
+        .meta-table td { vertical-align: top; padding: 4px 0; }
+        .items-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+        .items-table th { background-color: #f4f4f4; border: 1px solid #ddd; padding: 8px; text-align: left; }
+        .items-table td { border: 1px solid #ddd; padding: 8px; }
+        .summary-table { width: 45%; margin-left: auto; border-collapse: collapse; }
+        .summary-table td { padding: 6px 8px; border-bottom: 1px solid #eee; }
+        .grand-total { font-weight: bold; font-size: 14px; border-top: 2px solid #333; color: #000; }
+        .footer { text-align: center; margin-top: 30px; font-size: 10px; color: #777; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>BiteBazaar</h1>
+        <p>Order Tax Invoice &amp; Payment Receipt</p>
+    </div>
+
+    <table class="meta-table">
+        <tr>
+            <td>
+                <strong>Order ID:</strong> #{{ order.id }}<br>
+                <strong>Date:</strong> {{ order.created_at|date:"d M Y, h:i A" }}<br>
+                <strong>Payment Method:</strong> {{ order.payment_method }} ({{ order.payment_status }})<br>
+                {% if order.razorpay_payment_id %}
+                <strong>Payment ID:</strong> {{ order.razorpay_payment_id }}
+                {% endif %}
+            </td>
+            <td style="text-align: right;">
+                <strong>Customer:</strong> {{ order.customer.first_name }} {{ order.customer.last_name }}<br>
+                <strong>Email:</strong> {{ order.customer.email }}<br>
+                <strong>Delivery Address:</strong><br>{{ order.delivery_address }}
+            </td>
+        </tr>
+    </table>
+
+    <table class="items-table">
+        <thead>
+            <tr>
+                <th>Restaurant</th>
+                <th>Item</th>
+                <th>Qty</th>
+                <th>Unit Price</th>
+                <th>Total</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in items_list %}
+            <tr>
+                <td>{{ item.restaurant_name }}</td>
+                <td>{{ item.name }}</td>
+                <td>{{ item.quantity }}</td>
+                <td>Rs. {{ item.price }}</td>
+                <td>Rs. {{ item.line_total }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <table class="summary-table">
+        <tr>
+            <td>Item Total</td>
+            <td style="text-align: right;">Rs. {{ order.item_total }}</td>
+        </tr>
+        <tr>
+            <td>Restaurant GST (5%)</td>
+            <td style="text-align: right;">Rs. {{ order.restaurant_gst }}</td>
+        </tr>
+        <tr>
+            <td>Delivery Fee</td>
+            <td style="text-align: right;">Rs. {{ order.delivery_fee }}</td>
+        </tr>
+        <tr>
+            <td>Platform Fee</td>
+            <td style="text-align: right;">Rs. {{ order.platform_fee }}</td>
+        </tr>
+        <tr class="grand-total">
+            <td>Grand Total</td>
+            <td style="text-align: right;">Rs. {{ order.total_price }}</td>
+        </tr>
+    </table>
+
+    <div class="footer">
+        <p>Thank you for ordering with BiteBazaar! Enjoy your meal.</p>
+    </div>
+</body>
+</html>
